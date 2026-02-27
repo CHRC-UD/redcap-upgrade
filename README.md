@@ -17,6 +17,8 @@ instead of the web server account.
 
 ### Basic usage
 
+Before running it the first time, open `redcap_easy_upgrade.sh` and review the **configuration block at the top** (`REDCAP_ROOT`, MySQL and Community credential variables). In most cases the defaults will work, but this is where you override anything that differs on your system.
+
 From this directory:
 
 ```bash
