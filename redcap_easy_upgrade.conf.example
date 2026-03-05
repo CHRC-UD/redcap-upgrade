@@ -1,0 +1,87 @@
+# =============================================================================
+# redcap_easy_upgrade.conf
+# =============================================================================
+# Site-specific configuration for redcap_easy_upgrade.sh.
+#
+# SETUP:
+#   cp redcap_easy_upgrade.conf.example redcap_easy_upgrade.conf
+#   # Edit redcap_easy_upgrade.conf to match your environment.
+#
+# This file is sourced by the script at startup. Values set here take
+# precedence over the script's built-in defaults but can still be overridden
+# at runtime by exporting the same variable before calling the script, e.g.:
+#   REDCAP_ROOT=/opt/redcap ./redcap_easy_upgrade.sh
+#
+# Leave any value empty ("") or commented out to use auto-detection or to
+# be prompted interactively when needed.
+#
+# SECURITY:
+#   chmod 600 redcap_easy_upgrade.conf  — this file may contain credentials.
+#   It is excluded from version control via .gitignore.
+# =============================================================================
+
+
+# -----------------------------------------------------------------------------
+# REDCap webroot
+# Full path to the directory that contains database.php and all redcap_v* dirs.
+# -----------------------------------------------------------------------------
+REDCAP_ROOT="/var/www/html/redcap"
+
+
+# -----------------------------------------------------------------------------
+# Logging
+# Directory where per-run log files are written.
+# Each run creates: logs/upgrade_YYYYMMDD_HHMMSS.log
+# All stdout/stderr are tee'd here. Passwords typed at prompts are NOT logged.
+# Defaults to the "logs/" subdirectory next to the script if left empty.
+# -----------------------------------------------------------------------------
+UPGRADE_LOG_DIR=""
+
+
+# -----------------------------------------------------------------------------
+# VUMC Community credentials
+# Used to authenticate the upgrade zip download from the VUMC endpoint.
+# If left blank the script will prompt interactively and retry on failure.
+# Wrap the password in single quotes if it contains special characters.
+# -----------------------------------------------------------------------------
+REDCAP_COMMUNITY_USER=""
+REDCAP_COMMUNITY_PASSWORD=""
+
+
+# -----------------------------------------------------------------------------
+# MySQL connection — upgrade SQL execution
+# The script auto-detects host/port/db from database.php and user/pass from
+# redcap_config (redcap_updates_user). Only set values here if auto-detection
+# fails or you need to use a different account for the upgrade step.
+# If user/pass are still empty after auto-detection the script will prompt.
+# -----------------------------------------------------------------------------
+
+# Leave blank to auto-detect from database.php (strongly recommended).
+REDCAP_UPGRADE_MYSQL_HOST=""
+REDCAP_UPGRADE_MYSQL_PORT=""
+REDCAP_UPGRADE_MYSQL_DB=""
+
+# Override the upgrade MySQL user/password (leave blank to auto-detect).
+REDCAP_UPGRADE_MYSQL_USER=""
+REDCAP_UPGRADE_MYSQL_PASSWORD=""
+
+# SSL certificate paths. Leave blank to auto-detect from database.php.
+REDCAP_UPGRADE_MYSQL_SSL_CA=""
+REDCAP_UPGRADE_MYSQL_SSL_CERT=""
+REDCAP_UPGRADE_MYSQL_SSL_KEY=""
+
+
+# -----------------------------------------------------------------------------
+# HTTP/HTTPS proxy for outbound curl requests (version list + zip download).
+# Set to a full proxy URL, e.g. http://proxy.example.com:3128
+# Leave blank to fall back to the standard https_proxy / HTTPS_PROXY /
+# http_proxy / HTTP_PROXY environment variables (curl honours these natively).
+# -----------------------------------------------------------------------------
+REDCAP_UPGRADE_PROXY=""
+
+
+# -----------------------------------------------------------------------------
+# Safety — web server service accounts that must NOT run this script.
+# Space-separated list. Add your site's account name if it differs.
+# -----------------------------------------------------------------------------
+REDCAP_UPGRADE_FORBIDDEN_USERS="apache www-data wwwrun nginx"

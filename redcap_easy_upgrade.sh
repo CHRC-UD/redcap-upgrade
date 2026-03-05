@@ -56,65 +56,45 @@
 # =============================================================================
 # CONFIGURATION
 # =============================================================================
-# Edit this section to match your environment.
-# Every value can also be supplied as an environment variable at runtime,
-# which takes precedence over what is set here.
-# Leave a value empty ("") to fall back to auto-detection or interactive prompt.
+# Site-specific settings live in redcap_easy_upgrade.conf (not committed).
+# Copy redcap_easy_upgrade.conf.example to redcap_easy_upgrade.conf and edit.
+#
+# Resolution order for every variable (first non-empty value wins):
+#   1. Environment variable exported before calling this script
+#   2. Value set in redcap_easy_upgrade.conf
+#   3. Built-in default below
+#   4. Auto-detection from database.php / redcap_config (where supported)
+#   5. Interactive prompt
 # =============================================================================
 
-# Full path to the REDCap webroot — the directory that contains database.php
-# and all redcap_v* version folders.
-REDCAP_ROOT="${REDCAP_ROOT:-/var/www/html/redcap}"
+# ── Built-in defaults (fallbacks only — override in .conf or via env) ─────────
+_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+: "${REDCAP_ROOT:=/var/www/html/redcap}"
+: "${UPGRADE_LOG_DIR:=${_SCRIPT_DIR}/logs}"
+: "${REDCAP_COMMUNITY_USER:=}"
+: "${REDCAP_COMMUNITY_PASSWORD:=}"
+: "${REDCAP_UPGRADE_MYSQL_USER:=}"
+: "${REDCAP_UPGRADE_MYSQL_PASSWORD:=}"
+: "${REDCAP_UPGRADE_MYSQL_HOST:=}"
+: "${REDCAP_UPGRADE_MYSQL_PORT:=}"
+: "${REDCAP_UPGRADE_MYSQL_DB:=}"
+: "${REDCAP_UPGRADE_MYSQL_SSL_CA:=}"
+: "${REDCAP_UPGRADE_MYSQL_SSL_CERT:=}"
+: "${REDCAP_UPGRADE_MYSQL_SSL_KEY:=}"
+: "${REDCAP_UPGRADE_PROXY:=}"
+: "${REDCAP_UPGRADE_FORBIDDEN_USERS:=apache www-data wwwrun nginx}"
 
-# ---------------------------------------------------------------------------
-# Logging — where to write per-run log files.
-# Each invocation creates a timestamped file: logs/upgrade_YYYYMMDD_HHMMSS.log
-# All stdout and stderr are tee'd to the log; interactive prompts are preserved
-# on the terminal. Passwords typed at prompts are NOT written to the log.
-# ---------------------------------------------------------------------------
-UPGRADE_LOG_DIR="${UPGRADE_LOG_DIR:-$(dirname "${BASH_SOURCE[0]}")/logs}"
-
-# ---------------------------------------------------------------------------
-# VUMC Community credentials
-# Used to authenticate the upgrade zip download from the VUMC endpoint.
-# If left blank, the script will prompt interactively and retry on failure.
-# ---------------------------------------------------------------------------
-REDCAP_COMMUNITY_USER="${REDCAP_COMMUNITY_USER:-}"
-REDCAP_COMMUNITY_PASSWORD="${REDCAP_COMMUNITY_PASSWORD:-}"
-
-# ---------------------------------------------------------------------------
-# MySQL connection — upgrade SQL execution
-# The script reads these automatically from database.php (host/port/db) and
-# redcap_config (user/pass via redcap_updates_user). Only override here if
-# auto-detection fails or you need a different user for the upgrade.
-# If user/pass remain empty after auto-detection, the script will prompt.
-# ---------------------------------------------------------------------------
-REDCAP_UPGRADE_MYSQL_USER="${REDCAP_UPGRADE_MYSQL_USER:-}"
-REDCAP_UPGRADE_MYSQL_PASSWORD="${REDCAP_UPGRADE_MYSQL_PASSWORD:-}"
-
-# Leave blank to auto-detect from database.php (strongly recommended).
-REDCAP_UPGRADE_MYSQL_HOST="${REDCAP_UPGRADE_MYSQL_HOST:-}"
-REDCAP_UPGRADE_MYSQL_PORT="${REDCAP_UPGRADE_MYSQL_PORT:-}"
-REDCAP_UPGRADE_MYSQL_DB="${REDCAP_UPGRADE_MYSQL_DB:-}"
-
-# SSL certificate paths for MySQL. Leave blank to auto-detect from database.php.
-REDCAP_UPGRADE_MYSQL_SSL_CA="${REDCAP_UPGRADE_MYSQL_SSL_CA:-}"
-REDCAP_UPGRADE_MYSQL_SSL_CERT="${REDCAP_UPGRADE_MYSQL_SSL_CERT:-}"
-REDCAP_UPGRADE_MYSQL_SSL_KEY="${REDCAP_UPGRADE_MYSQL_SSL_KEY:-}"
-
-# ---------------------------------------------------------------------------
-# HTTP/HTTPS proxy for outbound curl requests (version list + zip download).
-# Set to a full proxy URL, e.g. http://proxy.example.com:3128
-# Leave blank to fall back to the standard https_proxy / HTTPS_PROXY /
-# http_proxy / HTTP_PROXY environment variables (curl honours these natively).
-# ---------------------------------------------------------------------------
-REDCAP_UPGRADE_PROXY="${REDCAP_UPGRADE_PROXY:-}"
-
-# ---------------------------------------------------------------------------
-# Safety — accounts that must NOT run this script (web server service accounts).
-# Add your site's service account names here if they differ from the defaults.
-# ---------------------------------------------------------------------------
-REDCAP_UPGRADE_FORBIDDEN_USERS="${REDCAP_UPGRADE_FORBIDDEN_USERS:-apache www-data wwwrun nginx}"
+# ── Source site config file if present ────────────────────────────────────────
+_CONF_FILE="${_SCRIPT_DIR}/redcap_easy_upgrade.conf"
+if [[ -f "$_CONF_FILE" ]]; then
+  # shellcheck source=redcap_easy_upgrade.conf.example
+  source "$_CONF_FILE"
+else
+  echo "NOTE: No config file found at ${_CONF_FILE}"
+  echo "      Copy redcap_easy_upgrade.conf.example to redcap_easy_upgrade.conf"
+  echo "      and edit it to match your environment."
+  echo ""
+fi
 
 # =============================================================================
 # END OF CONFIGURATION

@@ -1,3 +1,6 @@
+# Site-specific config (may contain credentials — never commit)
+redcap_easy_upgrade.conf
+
 # Upgrade run logs — one file per execution, retained locally but not committed
 logs/*.log
 !logs/.gitkeep
