@@ -103,6 +103,14 @@ REDCAP_UPGRADE_MYSQL_SSL_CERT="${REDCAP_UPGRADE_MYSQL_SSL_CERT:-}"
 REDCAP_UPGRADE_MYSQL_SSL_KEY="${REDCAP_UPGRADE_MYSQL_SSL_KEY:-}"
 
 # ---------------------------------------------------------------------------
+# HTTP/HTTPS proxy for outbound curl requests (version list + zip download).
+# Set to a full proxy URL, e.g. http://proxy.example.com:3128
+# Leave blank to fall back to the standard https_proxy / HTTPS_PROXY /
+# http_proxy / HTTP_PROXY environment variables (curl honours these natively).
+# ---------------------------------------------------------------------------
+REDCAP_UPGRADE_PROXY="${REDCAP_UPGRADE_PROXY:-}"
+
+# ---------------------------------------------------------------------------
 # Safety — accounts that must NOT run this script (web server service accounts).
 # Add your site's service account names here if they differ from the defaults.
 # ---------------------------------------------------------------------------
@@ -117,6 +125,16 @@ set -euo pipefail
 
 VERSIONS_URL="https://redcap.vumc.org/plugins/redcap_consortium/versions.php"
 FORBIDDEN_USERS="$REDCAP_UPGRADE_FORBIDDEN_USERS"
+
+# Build curl proxy arguments.
+# Precedence: REDCAP_UPGRADE_PROXY > https_proxy > HTTPS_PROXY > http_proxy > HTTP_PROXY
+_proxy="${REDCAP_UPGRADE_PROXY:-${https_proxy:-${HTTPS_PROXY:-${http_proxy:-${HTTP_PROXY:-}}}}}"
+_CURL_PROXY_ARGS=()
+if [[ -n "$_proxy" ]]; then
+  _CURL_PROXY_ARGS=(--proxy "$_proxy")
+fi
+unset _proxy
+
 DRY_RUN=false
 CHECK_VERSIONS=false
 SKIP_DOWNLOAD=false
@@ -282,7 +300,7 @@ PHPEOF
 # ── Fetch available versions JSON from endpoint ────────────────────────────────
 fetch_versions_json() {
   local current="$1"
-  curl -fsS --connect-timeout 20 "${VERSIONS_URL}?current_version=${current}" 2>/dev/null
+  curl -fsS --connect-timeout 20 "${_CURL_PROXY_ARGS[@]}" "${VERSIONS_URL}?current_version=${current}" 2>/dev/null
 }
 
 # ── Print versions table from a JSON file ─────────────────────────────────────
@@ -342,6 +360,7 @@ PY
 download_version_zip() {
   local version="$1" comm_user="$2" comm_pass="$3" zip_file="$4"
   curl -sS --connect-timeout 60 --max-time 300 \
+    "${_CURL_PROXY_ARGS[@]}" \
     --data-urlencode "username=$comm_user" \
     --data-urlencode "password=$comm_pass" \
     --data-urlencode "version=$version" \
