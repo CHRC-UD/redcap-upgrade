@@ -52,5 +52,8 @@ To preview the SQL only:
   Run it as `root` or another admin account.
 - Keep regular backups of your REDCap database and webroot before performing upgrades.
 - If you use a proxy or have SELinux enforcing, ensure outbound access to  
-  `https://redcap.vumc.org/plugins/redcap_consortium/versions.php` is allowed.
+  `https://redcap.vumc.org/plugins/redcap_consortium/versions.php` is allowed.  
+  Set `REDCAP_UPGRADE_PROXY=http://proxy.example.com:3128` (or the standard  
+  `https_proxy` / `HTTPS_PROXY` / `http_proxy` / `HTTP_PROXY` variables) to  
+  route all curl requests through a proxy.
 
