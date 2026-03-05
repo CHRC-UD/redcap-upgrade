@@ -757,7 +757,7 @@ check_selinux_permissions() {
   # httpd_unified ON means httpd treats all httpd_* types as fully accessible
   local httpd_unified=false
   if command -v getsebool >/dev/null 2>/dev/null; then
-    getsebool httpd_unified 2>/dev/null | grep -q '\-\-> on$' && httpd_unified=true
+    getsebool httpd_unified 2>/dev/null | grep -q '--> on$' && httpd_unified=true
   fi
 
   $has_write_type || $httpd_unified || {
