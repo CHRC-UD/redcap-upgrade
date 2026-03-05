@@ -818,6 +818,42 @@ check_selinux_permissions() {
   echo ""
   [[ "$fix_sel" =~ ^[Yy]$ ]] || { echo "SELinux contexts NOT changed."; return 0; }
 
+  echo "┌─────────────────────────────────────────────────────────────────────────────"
+  echo "│  IMPORTANT — READ BEFORE CONTINUING"
+  echo "│"
+  echo "│  This will run the following commands against your live system:"
+  echo "│"
+  echo "│    chcon -R -t httpd_sys_content_t    $REDCAP_ROOT"
+  [[ -d "$REDCAP_ROOT/temp" ]] && \
+  echo "│    chcon -R -t httpd_sys_rw_content_t $REDCAP_ROOT/temp"
+  echo "│"
+  if command -v semanage >/dev/null 2>&1; then
+  echo "│    semanage fcontext -a/-m  (makes contexts survive restorecon / OS relabel)"
+  fi
+  echo "│"
+  if $httpd_unified; then
+  echo "│    setsebool -P httpd_unified off  (persistent — affects ALL httpd vhosts)"
+  echo "│"
+  echo "│  NOTE: Disabling httpd_unified affects every virtual host on this machine,"
+  echo "│  not just REDCap. If any other web app on this server relies on the unified"
+  echo "│  boolean being ON, it may break. Verify with your hosting team first."
+  echo "│"
+  fi
+  echo "│  chcon / semanage changes are system-wide and cannot be rolled back"
+  echo "│  automatically. If something breaks, restore contexts with:"
+  echo "│    restorecon -Rv $REDCAP_ROOT"
+  echo "│"
+  echo "│  Only proceed if you understand SELinux context management and have"
+  echo "│  verified these changes are appropriate for this server."
+  echo "└─────────────────────────────────────────────────────────────────────────────"
+  echo ""
+  read -r -p "  Type YES to confirm and apply SELinux context changes: " confirm_sel
+  echo ""
+  if [[ "$confirm_sel" != "YES" ]]; then
+    echo "SELinux contexts NOT changed."
+    return 0
+  fi
+
   if ! command -v chcon >/dev/null 2>&1; then
     echo "ERROR: chcon not found — cannot set SELinux contexts." >&2
     return 1
