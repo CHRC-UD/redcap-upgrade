@@ -67,22 +67,8 @@
 #   5. Interactive prompt
 # =============================================================================
 
-# ── Built-in defaults (fallbacks only — override in .conf or via env) ─────────
+# ── Resolve script directory (needed for conf file path and log default) ──────
 _SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-: "${REDCAP_ROOT:=/var/www/html/redcap}"
-: "${UPGRADE_LOG_DIR:=${_SCRIPT_DIR}/logs}"
-: "${REDCAP_COMMUNITY_USER:=}"
-: "${REDCAP_COMMUNITY_PASSWORD:=}"
-: "${REDCAP_UPGRADE_MYSQL_USER:=}"
-: "${REDCAP_UPGRADE_MYSQL_PASSWORD:=}"
-: "${REDCAP_UPGRADE_MYSQL_HOST:=}"
-: "${REDCAP_UPGRADE_MYSQL_PORT:=}"
-: "${REDCAP_UPGRADE_MYSQL_DB:=}"
-: "${REDCAP_UPGRADE_MYSQL_SSL_CA:=}"
-: "${REDCAP_UPGRADE_MYSQL_SSL_CERT:=}"
-: "${REDCAP_UPGRADE_MYSQL_SSL_KEY:=}"
-: "${REDCAP_UPGRADE_PROXY:=}"
-: "${REDCAP_UPGRADE_FORBIDDEN_USERS:=apache www-data wwwrun nginx}"
 
 # ── Source site config file if present ────────────────────────────────────────
 _CONF_FILE="${_SCRIPT_DIR}/redcap_easy_upgrade.conf"
@@ -96,6 +82,15 @@ else
   echo ""
 fi
 
+# ── Apply built-in defaults for anything left blank in the conf ───────────────
+# These run AFTER sourcing so an empty value in the conf falls through to the
+# default here (a non-empty conf value or pre-exported env var wins).
+[[ -z "${REDCAP_ROOT:-}"                    ]] && REDCAP_ROOT="/var/www/html/redcap"
+[[ -z "${UPGRADE_LOG_DIR:-}"                ]] && UPGRADE_LOG_DIR="${_SCRIPT_DIR}/logs"
+[[ -z "${REDCAP_UPGRADE_FORBIDDEN_USERS:-}" ]] && REDCAP_UPGRADE_FORBIDDEN_USERS="apache www-data wwwrun nginx"
+# All other vars (credentials, MySQL, SSL, proxy) default to empty — prompts or
+# auto-detection handle them later in the script.
+
 # =============================================================================
 # END OF CONFIGURATION
 # Do not edit below this line unless you know what you are doing.
@@ -104,17 +99,7 @@ fi
 set -euo pipefail
 
 VERSIONS_URL="https://redcap.vumc.org/plugins/redcap_consortium/versions.php"
-FORBIDDEN_USERS="$REDCAP_UPGRADE_FORBIDDEN_USERS"
-
-# Build curl proxy arguments.
-# Precedence: REDCAP_UPGRADE_PROXY > https_proxy > HTTPS_PROXY > http_proxy > HTTP_PROXY
-_proxy="${REDCAP_UPGRADE_PROXY:-${https_proxy:-${HTTPS_PROXY:-${http_proxy:-${HTTP_PROXY:-}}}}}"
-_CURL_PROXY_ARGS=()
-if [[ -n "$_proxy" ]]; then
-  _CURL_PROXY_ARGS=(--proxy "$_proxy")
-fi
-unset _proxy
-
+FORBIDDEN_USERS="${REDCAP_UPGRADE_FORBIDDEN_USERS:-apache www-data wwwrun nginx}"
 DRY_RUN=false
 CHECK_VERSIONS=false
 SKIP_DOWNLOAD=false
@@ -280,7 +265,7 @@ PHPEOF
 # ── Fetch available versions JSON from endpoint ────────────────────────────────
 fetch_versions_json() {
   local current="$1"
-  curl -fsS --connect-timeout 20 "${_CURL_PROXY_ARGS[@]}" "${VERSIONS_URL}?current_version=${current}" 2>/dev/null
+  curl -fsS --connect-timeout 20 "${VERSIONS_URL}?current_version=${current}" 2>/dev/null
 }
 
 # ── Print versions table from a JSON file ─────────────────────────────────────
@@ -340,7 +325,6 @@ PY
 download_version_zip() {
   local version="$1" comm_user="$2" comm_pass="$3" zip_file="$4"
   curl -sS --connect-timeout 60 --max-time 300 \
-    "${_CURL_PROXY_ARGS[@]}" \
     --data-urlencode "username=$comm_user" \
     --data-urlencode "password=$comm_pass" \
     --data-urlencode "version=$version" \
