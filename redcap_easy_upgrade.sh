@@ -67,6 +67,14 @@
 REDCAP_ROOT="${REDCAP_ROOT:-/var/www/html/redcap}"
 
 # ---------------------------------------------------------------------------
+# Logging — where to write per-run log files.
+# Each invocation creates a timestamped file: logs/upgrade_YYYYMMDD_HHMMSS.log
+# All stdout and stderr are tee'd to the log; interactive prompts are preserved
+# on the terminal. Passwords typed at prompts are NOT written to the log.
+# ---------------------------------------------------------------------------
+UPGRADE_LOG_DIR="${UPGRADE_LOG_DIR:-$(dirname "${BASH_SOURCE[0]}")/logs}"
+
+# ---------------------------------------------------------------------------
 # VUMC Community credentials
 # Used to authenticate the upgrade zip download from the VUMC endpoint.
 # If left blank, the script will prompt interactively and retry on failure.
@@ -154,6 +162,22 @@ fi
 _TMPFILES=()
 _cleanup() { rm -rf "${_TMPFILES[@]}" 2>/dev/null || true; }
 trap _cleanup EXIT
+
+# ── Logging setup ──────────────────────────────────────────────────────────────
+# Tee all stdout + stderr to a timestamped log file in $UPGRADE_LOG_DIR.
+# Interactive read prompts are unaffected (they read from stdin).
+# Passwords typed at "-s" prompts go to stdin only and are never written here.
+mkdir -p "$UPGRADE_LOG_DIR" 2>/dev/null || {
+  echo "WARNING: Could not create log directory: $UPGRADE_LOG_DIR — logging to stdout only." >&2
+}
+if [[ -d "$UPGRADE_LOG_DIR" ]]; then
+  LOG_FILE="$UPGRADE_LOG_DIR/upgrade_$(date +%Y%m%d_%H%M%S).log"
+  exec > >(tee -a "$LOG_FILE") 2>&1
+  echo "┌─────────────────────────────────────────────────────────────────────────────"
+  echo "│  Log file: $LOG_FILE"
+  echo "└─────────────────────────────────────────────────────────────────────────────"
+  echo ""
+fi
 
 # ── Get the current REDCap version from the database (via redcap_connect.php) ─
 # This mirrors Upgrade::fetchREDCapVersionUpdatesList() which passes REDCAP_VERSION.
