@@ -711,21 +711,27 @@ check_webserver_permissions() {
   echo ""
 
   if [[ "$fix_perms" =~ ^[Yy]$ ]]; then
-    echo "Fixing permissions..."
+    echo "Fixing permissions... (this may take a moment)"
 
-    # Transfer ownership of everything to root (safe admin baseline)
+    echo "  [$(date +%H:%M:%S)] 1/4: Resetting ownership of all files to root:root..."
     chown -R root:root "$REDCAP_ROOT" 2>/dev/null || true
 
-    # Dirs readable+executable by all, files readable by all — no write for group/other
+    echo "  [$(date +%H:%M:%S)] 2/4: Setting directory (755) and file (644) modes..."
     chmod -R u+rwX,go+rX,go-w "$REDCAP_ROOT" 2>/dev/null || true
 
     # Restore temp/ so the web server can write to it
     if [[ -d "$REDCAP_ROOT/temp" ]]; then
+      echo "  [$(date +%H:%M:%S)] 3/4: Restoring web server ownership for temp/ directory..."
       chown -R "$web_user:$web_user" "$REDCAP_ROOT/temp" 2>/dev/null || true
+      echo "  [$(date +%H:%M:%S)] 4/4: Setting web server write permissions for temp/ directory..."
       chmod -R u+rwX,go-rwx "$REDCAP_ROOT/temp" 2>/dev/null || true
+      echo "  [$(date +%H:%M:%S)] Done."
+      echo ""
       echo "  $REDCAP_ROOT         → root:root, dirs=755, files=644"
       echo "  $REDCAP_ROOT/temp/   → $web_user:$web_user, 700 (web server only)"
     else
+      echo "  [$(date +%H:%M:%S)] Done."
+      echo ""
       echo "  $REDCAP_ROOT → root:root, dirs=755, files=644"
     fi
     echo ""
@@ -842,16 +848,18 @@ check_selinux_permissions() {
     return 1
   fi
 
-  echo "Setting SELinux contexts..."
+  echo "Setting SELinux contexts... (this may take a minute)"
 
   # Turn off httpd_unified if it was the problem
   if $httpd_unified && command -v setsebool >/dev/null 2>&1; then
+    echo "  [$(date +%H:%M:%S)] 1/3: Disabling httpd_unified boolean (persistent)..."
     setsebool -P httpd_unified off 2>/dev/null && \
-      echo "  httpd_unified → off (persistent)" || \
-      echo "  WARNING: Could not disable httpd_unified boolean." >&2
+      echo "    httpd_unified → off" || \
+      echo "    WARNING: Could not disable httpd_unified boolean." >&2
   fi
 
   # Apply contexts immediately with chcon
+  echo "  [$(date +%H:%M:%S)] 2/3: Applying immediate contexts via chcon..."
   chcon -R -t httpd_sys_content_t    "$REDCAP_ROOT"       2>/dev/null || true
   if [[ -d "$REDCAP_ROOT/temp" ]]; then
     chcon -R -t httpd_sys_rw_content_t "$REDCAP_ROOT/temp" 2>/dev/null || true
@@ -859,6 +867,8 @@ check_selinux_permissions() {
 
   # Make contexts survive a relabel (restorecon) via semanage fcontext
   if command -v semanage >/dev/null 2>&1; then
+    echo "  [$(date +%H:%M:%S)] 3/3: Registering persistent contexts via semanage..."
+    echo "             (This triggers a policy rebuild and can be VERY slow; please wait)"
     # Add/update the root rule (most specific last wins on overlap)
     semanage fcontext -a -t httpd_sys_content_t    "${REDCAP_ROOT}(/.*)?" 2>/dev/null || \
       semanage fcontext -m -t httpd_sys_content_t  "${REDCAP_ROOT}(/.*)?" 2>/dev/null || true
@@ -867,12 +877,14 @@ check_selinux_permissions() {
       semanage fcontext -a -t httpd_sys_rw_content_t    "${REDCAP_ROOT}/temp(/.*)?" 2>/dev/null || \
         semanage fcontext -m -t httpd_sys_rw_content_t  "${REDCAP_ROOT}/temp(/.*)?" 2>/dev/null || true
     fi
-    echo "  Contexts made persistent via semanage fcontext."
+    echo "    Contexts registered successfully."
   else
     echo "  WARNING: semanage not found — chcon changes won't survive restorecon/relabel."
     echo "  Install policycoreutils-python-utils to make contexts permanent."
   fi
 
+  echo "  [$(date +%H:%M:%S)] Done."
+  echo ""
   echo "  $REDCAP_ROOT        → httpd_sys_content_t    (read-only for httpd)"
   [[ -d "$REDCAP_ROOT/temp" ]] && \
     echo "  $REDCAP_ROOT/temp/  → httpd_sys_rw_content_t (writable for httpd)"
