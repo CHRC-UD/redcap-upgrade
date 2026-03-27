@@ -263,9 +263,21 @@ PHPEOF
 }
 
 # ── Fetch available versions JSON from endpoint ────────────────────────────────
+build_curl_proxy_args() {
+  local -a proxy_args=()
+  if [[ -n "${REDCAP_UPGRADE_PROXY:-}" ]]; then
+    proxy_args+=(--proxy "$REDCAP_UPGRADE_PROXY")
+  fi
+  printf '%s\n' "${proxy_args[@]}"
+}
+
 fetch_versions_json() {
   local current="$1"
-  curl -fsS --connect-timeout 20 "${VERSIONS_URL}?current_version=${current}" 2>/dev/null
+  local -a curl_args=()
+  while IFS= read -r arg; do
+    [[ -n "$arg" ]] && curl_args+=("$arg")
+  done < <(build_curl_proxy_args)
+  curl "${curl_args[@]}" -fsS --connect-timeout 20 "${VERSIONS_URL}?current_version=${current}" 2>/dev/null
 }
 
 # ── Print versions table from a JSON file ─────────────────────────────────────
@@ -324,7 +336,11 @@ PY
 # POST params (mirrors Upgrade::performOneClickUpgrade): username, password, version
 download_version_zip() {
   local version="$1" comm_user="$2" comm_pass="$3" zip_file="$4"
-  curl -sS --connect-timeout 60 --max-time 300 \
+  local -a curl_args=()
+  while IFS= read -r arg; do
+    [[ -n "$arg" ]] && curl_args+=("$arg")
+  done < <(build_curl_proxy_args)
+  curl "${curl_args[@]}" -sS --connect-timeout 60 --max-time 300 \
     --data-urlencode "username=$comm_user" \
     --data-urlencode "password=$comm_pass" \
     --data-urlencode "version=$version" \
@@ -1010,4 +1026,3 @@ PHPEOF
 }
 
 check_old_version_dirs
-
