@@ -91,6 +91,7 @@ fi
 [[ -z "${REDCAP_UPGRADE_FORBIDDEN_USERS:-}" ]] && REDCAP_UPGRADE_FORBIDDEN_USERS="apache www-data wwwrun nginx"
 [[ -z "${REDCAP_UPGRADE_MANAGE_SELINUX:-}"  ]] && REDCAP_UPGRADE_MANAGE_SELINUX="true"
 [[ -z "${REDCAP_UPGRADE_WRITABLE_PATHS:-}"  ]] && REDCAP_UPGRADE_WRITABLE_PATHS="temp edocs file_repository upload uploads cache"
+[[ -z "${REDCAP_UPGRADE_HTTP_SMOKE_CHECK:-}" ]] && REDCAP_UPGRADE_HTTP_SMOKE_CHECK="true"
 [[ -z "${REDCAP_UPGRADE_HTTP_BASE_URL:-}"   ]] && REDCAP_UPGRADE_HTTP_BASE_URL=""
 # All other vars (credentials, MySQL, SSL, proxy) default to empty — prompts or
 # auto-detection handle them later in the script.
@@ -537,6 +538,15 @@ infer_http_base_url() {
   fi
 }
 
+http_smoke_check_enabled() {
+  case "${REDCAP_UPGRADE_HTTP_SMOKE_CHECK,,}" in
+    0|false|no|off|disabled|skip)
+      return 1 ;;
+    *)
+      return 0 ;;
+  esac
+}
+
 validation_fail() {
   local message="$1"
   local version_regex
@@ -553,9 +563,11 @@ validation_fail() {
     echo "  3. Keep writable REDCap paths labeled httpd_sys_rw_content_t:" >&2
     echo "       REDCAP_UPGRADE_WRITABLE_PATHS=\"$REDCAP_UPGRADE_WRITABLE_PATHS\"" >&2
     echo "  4. If the HTTP smoke URL is wrong, set REDCAP_UPGRADE_HTTP_BASE_URL in redcap_easy_upgrade.conf." >&2
+    echo "     If local HTTP checks are blocked on this host, set REDCAP_UPGRADE_HTTP_SMOKE_CHECK=false." >&2
   else
     echo "  2. SELinux management is disabled by REDCAP_UPGRADE_MANAGE_SELINUX=$REDCAP_UPGRADE_MANAGE_SELINUX." >&2
     echo "  3. If the HTTP smoke URL is wrong, set REDCAP_UPGRADE_HTTP_BASE_URL in redcap_easy_upgrade.conf." >&2
+    echo "     If local HTTP checks are blocked on this host, set REDCAP_UPGRADE_HTTP_SMOKE_CHECK=false." >&2
   fi
   echo "" >&2
   return 1
@@ -636,6 +648,12 @@ validate_post_upgrade() {
     echo "  SELinux management disabled; skipped SELinux type and user_tmp_t assertions."
   else
     echo "  SELinux inactive or unavailable; skipped SELinux type assertions."
+  fi
+
+  if ! http_smoke_check_enabled; then
+    echo "  HTTP smoke disabled by REDCAP_UPGRADE_HTTP_SMOKE_CHECK=$REDCAP_UPGRADE_HTTP_SMOKE_CHECK."
+    echo "Post-upgrade validation passed."
+    return 0
   fi
 
   if ! command -v curl >/dev/null 2>&1; then

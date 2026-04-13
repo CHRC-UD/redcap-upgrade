@@ -82,10 +82,14 @@ REDCAP_UPGRADE_PROXY=""
 
 # -----------------------------------------------------------------------------
 # Post-upgrade HTTP smoke check
+# Set REDCAP_UPGRADE_HTTP_SMOKE_CHECK=false to skip the HTTP check on hosts
+# where local requests are intentionally blocked or handled by a different vhost.
+#
 # URL that maps to REDCAP_ROOT. Leave blank to infer http://127.0.0.1/redcap
 # when REDCAP_ROOT is /var/www/html/redcap. Set this if your local vhost needs
 # HTTPS, a hostname, a non-standard path, or a front-end proxy.
 # -----------------------------------------------------------------------------
+REDCAP_UPGRADE_HTTP_SMOKE_CHECK="true"
 REDCAP_UPGRADE_HTTP_BASE_URL=""
 
 

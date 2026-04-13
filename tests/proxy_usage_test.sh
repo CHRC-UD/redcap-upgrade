@@ -131,6 +131,22 @@ FUNCS
   selinux_management_enabled
 '
 
+run_bash_test "http_smoke_check_enabled treats false as disabled" '
+  set -euo pipefail
+
+  source /dev/stdin <<'\''FUNCS'\''
+'"$(extract_function http_smoke_check_enabled)"'
+FUNCS
+
+  REDCAP_UPGRADE_HTTP_SMOKE_CHECK=false
+  if http_smoke_check_enabled; then
+    exit 1
+  fi
+
+  REDCAP_UPGRADE_HTTP_SMOKE_CHECK=true
+  http_smoke_check_enabled
+'
+
 run_bash_test "install_version_tree succeeds without rollback copy" '
   set -euo pipefail
   tmpdir="$(mktemp -d)"

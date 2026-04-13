@@ -133,8 +133,13 @@ local config.
 Set the HTTP base URL if localhost inference is not correct for your Apache vhost:
 
 ```bash
+REDCAP_UPGRADE_HTTP_SMOKE_CHECK="true"
 REDCAP_UPGRADE_HTTP_BASE_URL="https://redcap.example.edu/redcap"
 ```
+
+Set `REDCAP_UPGRADE_HTTP_SMOKE_CHECK="false"` to skip the HTTP smoke check on hosts
+where localhost requests are blocked or do not route to the REDCap vhost. The default
+is `true`.
 
 Example validation output:
 
