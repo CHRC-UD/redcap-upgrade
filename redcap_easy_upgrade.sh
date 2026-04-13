@@ -407,6 +407,7 @@ install_version_tree() {
 
   echo "Installed: $dst_dir"
   [[ -n "$backup_dir" ]] && echo "Rollback copy retained: $backup_dir"
+  return 0
 }
 
 sync_version_owner_group() {

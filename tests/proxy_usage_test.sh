@@ -130,3 +130,20 @@ FUNCS
   REDCAP_UPGRADE_MANAGE_SELINUX=true
   selinux_management_enabled
 '
+
+run_bash_test "install_version_tree succeeds without rollback copy" '
+  set -euo pipefail
+  tmpdir="$(mktemp -d)"
+  trap '\''rm -rf "$tmpdir"'\'' EXIT
+
+  source /dev/stdin <<'\''FUNCS'\''
+'"$(extract_function install_version_tree)"'
+FUNCS
+
+  _TMPFILES=()
+  mkdir -p "$tmpdir/src/ControlCenter"
+  printf "<?php\n" > "$tmpdir/src/ControlCenter/index.php"
+
+  install_version_tree "$tmpdir/src" "$tmpdir/redcap_v16.0.22" >/dev/null
+  test -f "$tmpdir/redcap_v16.0.22/ControlCenter/index.php"
+'
