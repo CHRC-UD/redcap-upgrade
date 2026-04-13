@@ -447,8 +447,15 @@ selinux_type() {
 
 set_fcontext_rule() {
   local type="$1" path_regex="$2"
+  semanage fcontext -d "$path_regex" 2>/dev/null || true
   semanage fcontext -a -t "$type" "$path_regex" 2>/dev/null || \
     semanage fcontext -m -t "$type" "$path_regex"
+}
+
+set_fcontext_tree_rule() {
+  local type="$1" path_regex="$2"
+  set_fcontext_rule "$type" "$path_regex"
+  set_fcontext_rule "$type" "${path_regex}(/.*)?"
 }
 
 fcontext_path_regex() {
@@ -485,12 +492,12 @@ apply_selinux_labels() {
     version_regex="$(fcontext_path_regex "$version_dir")"
 
     echo "  Registering persistent fcontext rules with semanage..."
-    set_fcontext_rule httpd_sys_content_t "${version_regex}(/.*)?"
+    set_fcontext_tree_rule httpd_sys_content_t "$version_regex"
 
     local writable_path
     while IFS= read -r writable_path; do
       echo "  Registering writable fcontext: $writable_path -> httpd_sys_rw_content_t"
-      set_fcontext_rule httpd_sys_rw_content_t "$(fcontext_path_regex "$writable_path")(/.*)?"
+      set_fcontext_tree_rule httpd_sys_rw_content_t "$(fcontext_path_regex "$writable_path")"
     done < <(existing_writable_paths)
 
     echo "  Restoring contexts with restorecon..."

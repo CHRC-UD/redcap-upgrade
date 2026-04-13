@@ -147,3 +147,28 @@ FUNCS
   install_version_tree "$tmpdir/src" "$tmpdir/redcap_v16.0.22" >/dev/null
   test -f "$tmpdir/redcap_v16.0.22/ControlCenter/index.php"
 '
+
+run_bash_test "set_fcontext_tree_rule registers exact and recursive rules" '
+  set -euo pipefail
+  tmpdir="$(mktemp -d)"
+  trap '\''rm -rf "$tmpdir"'\'' EXIT
+
+  cat > "$tmpdir/semanage" <<'\''EOF'\''
+#!/usr/bin/env bash
+printf "%s\n" "$*" >> "$TMPDIR/semanage.calls"
+EOF
+  chmod +x "$tmpdir/semanage"
+
+  export PATH="$tmpdir:$PATH"
+  export TMPDIR="$tmpdir"
+
+  source /dev/stdin <<'\''FUNCS'\''
+'"$(extract_function set_fcontext_rule)"'
+'"$(extract_function set_fcontext_tree_rule)"'
+FUNCS
+
+  set_fcontext_tree_rule httpd_sys_rw_content_t "/var/www/html/redcap/temp"
+
+  grep -Fx -- "fcontext -a -t httpd_sys_rw_content_t /var/www/html/redcap/temp" "$tmpdir/semanage.calls" >/dev/null
+  grep -Fx -- "fcontext -a -t httpd_sys_rw_content_t /var/www/html/redcap/temp(/.*)?" "$tmpdir/semanage.calls" >/dev/null
+'
