@@ -12,7 +12,8 @@
 #   4. Downloads the upgrade zip from VUMC using your Community credentials
 #   5. Extracts and installs the redcap_v<VERSION>/ directory
 #   6. Generates and executes the upgrade SQL (same as upgrade.php)
-#   7. Checks Unix permissions and SELinux contexts for security issues
+#   7. Applies owner/group and SELinux labels for the new version directory
+#   8. Validates filesystem labels and HTTP reachability before cleanup
 #
 # Requirements:
 #   - bash 4+, php (CLI), curl, python3, unzip, mysql (CLI)
@@ -88,6 +89,9 @@ fi
 [[ -z "${REDCAP_ROOT:-}"                    ]] && REDCAP_ROOT="/var/www/html/redcap"
 [[ -z "${UPGRADE_LOG_DIR:-}"                ]] && UPGRADE_LOG_DIR="${_SCRIPT_DIR}/logs"
 [[ -z "${REDCAP_UPGRADE_FORBIDDEN_USERS:-}" ]] && REDCAP_UPGRADE_FORBIDDEN_USERS="apache www-data wwwrun nginx"
+[[ -z "${REDCAP_UPGRADE_MANAGE_SELINUX:-}"  ]] && REDCAP_UPGRADE_MANAGE_SELINUX="true"
+[[ -z "${REDCAP_UPGRADE_WRITABLE_PATHS:-}"  ]] && REDCAP_UPGRADE_WRITABLE_PATHS="temp edocs file_repository upload uploads cache"
+[[ -z "${REDCAP_UPGRADE_HTTP_BASE_URL:-}"   ]] && REDCAP_UPGRADE_HTTP_BASE_URL=""
 # All other vars (credentials, MySQL, SSL, proxy) default to empty — prompts or
 # auto-detection handle them later in the script.
 
@@ -348,6 +352,308 @@ download_version_zip() {
     "$VERSIONS_URL"
 }
 
+# ── Install and filesystem helpers ───────────────────────────────────────────
+reference_version_owner_group() {
+  local current_dir="$REDCAP_ROOT/redcap_v$CURRENT_VERSION"
+  if [[ "$CURRENT_VERSION" != "$TARGET_VERSION" && -d "$current_dir" ]]; then
+    stat -c '%u:%g' "$current_dir"
+    return 0
+  fi
+
+  local owner_group=""
+  owner_group="$(
+    find "$REDCAP_ROOT" -maxdepth 1 -type d -name 'redcap_v*' ! -name "redcap_v$TARGET_VERSION" \
+      -printf '%u:%g\n' 2>/dev/null | sort | uniq -c | sort -rn | awk 'NR == 1 { print $2 }'
+  )"
+  if [[ -n "$owner_group" ]]; then
+    printf '%s\n' "$owner_group"
+  else
+    stat -c '%u:%g' "$REDCAP_ROOT"
+  fi
+}
+
+install_version_tree() {
+  local src_dir="$1" dst_dir="$2"
+  local stamp staging backup_dir=""
+  stamp="$(date +%Y%m%d_%H%M%S)"
+  staging="${dst_dir}.install.${stamp}.$$"
+
+  echo "Installing with metadata-preserving copy..."
+  mkdir -p "$staging"
+  _TMPFILES+=("$staging")
+
+  if command -v rsync >/dev/null 2>&1; then
+    echo "  Using: rsync -aAX"
+    rsync -aAX "$src_dir"/ "$staging"/
+  else
+    echo "  rsync not found; using: cp -a"
+    cp -a "$src_dir"/. "$staging"/
+  fi
+
+  if [[ -d "$dst_dir" ]]; then
+    backup_dir="${dst_dir}.pre-upgrade.${stamp}"
+    echo "Preserving existing version directory as rollback copy: $backup_dir"
+    mv "$dst_dir" "$backup_dir"
+  fi
+
+  if ! mv "$staging" "$dst_dir"; then
+    echo "ERROR: Failed to move staged install into place: $dst_dir" >&2
+    if [[ -n "$backup_dir" && -d "$backup_dir" && ! -e "$dst_dir" ]]; then
+      echo "Restoring previous directory from rollback copy: $backup_dir" >&2
+      mv "$backup_dir" "$dst_dir"
+    fi
+    return 1
+  fi
+
+  echo "Installed: $dst_dir"
+  [[ -n "$backup_dir" ]] && echo "Rollback copy retained: $backup_dir"
+}
+
+sync_version_owner_group() {
+  local version_dir="$1"
+  local owner_group
+  owner_group="$(reference_version_owner_group)"
+  echo "Matching owner/group to existing REDCap version directories: $owner_group"
+  chown -R "$owner_group" "$version_dir"
+}
+
+selinux_mode() {
+  command -v getenforce >/dev/null 2>&1 || return 1
+  getenforce 2>/dev/null || return 1
+}
+
+selinux_active() {
+  local mode
+  mode="$(selinux_mode 2>/dev/null || true)"
+  [[ "$mode" == "Enforcing" || "$mode" == "Permissive" ]]
+}
+
+selinux_management_enabled() {
+  case "${REDCAP_UPGRADE_MANAGE_SELINUX,,}" in
+    0|false|no|off|disabled)
+      return 1 ;;
+    *)
+      return 0 ;;
+  esac
+}
+
+selinux_type() {
+  local path="$1" context
+  context="$(stat -c '%C' "$path" 2>/dev/null || true)"
+  [[ -n "$context" && "$context" == *:*:* ]] || return 1
+  printf '%s\n' "$context" | cut -d: -f3
+}
+
+set_fcontext_rule() {
+  local type="$1" path_regex="$2"
+  semanage fcontext -a -t "$type" "$path_regex" 2>/dev/null || \
+    semanage fcontext -m -t "$type" "$path_regex"
+}
+
+fcontext_path_regex() {
+  local path="$1"
+  printf '%s\n' "${path//./\\.}"
+}
+
+existing_writable_paths() {
+  local rel path
+  for rel in $REDCAP_UPGRADE_WRITABLE_PATHS; do
+    [[ -z "$rel" || "$rel" == /* || "$rel" == *".."* ]] && continue
+    path="$REDCAP_ROOT/$rel"
+    [[ -e "$path" ]] && printf '%s\n' "$path"
+  done
+}
+
+apply_selinux_labels() {
+  local version_dir="$1"
+  selinux_management_enabled || {
+    echo "SELinux management disabled by REDCAP_UPGRADE_MANAGE_SELINUX=$REDCAP_UPGRADE_MANAGE_SELINUX; skipping label application."
+    return 0
+  }
+  selinux_active || {
+    echo "SELinux: inactive or unavailable; skipping label application."
+    return 0
+  }
+
+  local mode
+  mode="$(selinux_mode)"
+  echo "Applying SELinux labels for $version_dir (mode: $mode)..."
+
+  if command -v semanage >/dev/null 2>&1 && command -v restorecon >/dev/null 2>&1; then
+    local version_regex
+    version_regex="$(fcontext_path_regex "$version_dir")"
+
+    echo "  Registering persistent fcontext rules with semanage..."
+    set_fcontext_rule httpd_sys_content_t "${version_regex}(/.*)?"
+
+    local writable_path
+    while IFS= read -r writable_path; do
+      echo "  Registering writable fcontext: $writable_path -> httpd_sys_rw_content_t"
+      set_fcontext_rule httpd_sys_rw_content_t "$(fcontext_path_regex "$writable_path")(/.*)?"
+    done < <(existing_writable_paths)
+
+    echo "  Restoring contexts with restorecon..."
+    restorecon -RFv "$version_dir"
+    while IFS= read -r writable_path; do
+      restorecon -RFv "$writable_path"
+    done < <(existing_writable_paths)
+  elif command -v chcon >/dev/null 2>&1; then
+    echo "  WARNING: semanage/restorecon unavailable; using chcon fallback."
+    echo "  WARNING: chcon labels are not persistent across a filesystem relabel."
+    chcon -R -t httpd_sys_content_t "$version_dir"
+
+    local writable_path
+    while IFS= read -r writable_path; do
+      echo "  Applying writable label: $writable_path -> httpd_sys_rw_content_t"
+      chcon -R -t httpd_sys_rw_content_t "$writable_path"
+    done < <(existing_writable_paths)
+  else
+    echo "ERROR: SELinux is active, but semanage/restorecon or chcon is not available." >&2
+    return 1
+  fi
+}
+
+infer_http_base_url() {
+  if [[ -n "$REDCAP_UPGRADE_HTTP_BASE_URL" ]]; then
+    printf '%s\n' "${REDCAP_UPGRADE_HTTP_BASE_URL%/}"
+    return 0
+  fi
+
+  if [[ "$REDCAP_ROOT" == "/var/www/html" ]]; then
+    printf '%s\n' "http://127.0.0.1"
+  elif [[ "$REDCAP_ROOT" == /var/www/html/* ]]; then
+    printf '%s/%s\n' "http://127.0.0.1" "${REDCAP_ROOT#/var/www/html/}"
+  else
+    return 1
+  fi
+}
+
+validation_fail() {
+  local message="$1"
+  local version_regex
+  version_regex="$(fcontext_path_regex "$VERSION_DIR")"
+  echo ""
+  echo "ERROR: Post-upgrade validation failed: $message" >&2
+  echo "" >&2
+  echo "Remediation:" >&2
+  echo "  1. Inspect the path and labels shown above." >&2
+  if selinux_management_enabled; then
+    echo "  2. Ensure persistent SELinux rules exist, for example:" >&2
+    echo "       semanage fcontext -a -t httpd_sys_content_t '${version_regex}(/.*)?'" >&2
+    echo "       restorecon -RFv '$VERSION_DIR'" >&2
+    echo "  3. Keep writable REDCap paths labeled httpd_sys_rw_content_t:" >&2
+    echo "       REDCAP_UPGRADE_WRITABLE_PATHS=\"$REDCAP_UPGRADE_WRITABLE_PATHS\"" >&2
+    echo "  4. If the HTTP smoke URL is wrong, set REDCAP_UPGRADE_HTTP_BASE_URL in redcap_easy_upgrade.conf." >&2
+  else
+    echo "  2. SELinux management is disabled by REDCAP_UPGRADE_MANAGE_SELINUX=$REDCAP_UPGRADE_MANAGE_SELINUX." >&2
+    echo "  3. If the HTTP smoke URL is wrong, set REDCAP_UPGRADE_HTTP_BASE_URL in redcap_easy_upgrade.conf." >&2
+  fi
+  echo "" >&2
+  return 1
+}
+
+validate_post_upgrade() {
+  local version_dir="$1"
+  local controlcenter_index="$version_dir/ControlCenter/index.php"
+  local version_type index_type writable_path writable_type smoke_base smoke_url http_code tmp_scan
+
+  echo ""
+  echo "Post-upgrade validation..."
+
+  [[ -f "$controlcenter_index" ]] || {
+    validation_fail "missing ControlCenter entrypoint: $controlcenter_index"
+    return 1
+  }
+
+  if ! command -v namei >/dev/null 2>&1; then
+    validation_fail "namei is required for path permission validation"
+    return 1
+  fi
+  echo "  namei -l $controlcenter_index"
+  namei -l "$controlcenter_index" || {
+    validation_fail "namei could not read $controlcenter_index"
+    return 1
+  }
+
+  echo ""
+  if selinux_management_enabled; then
+    echo "  ls -ldZ $version_dir $controlcenter_index"
+    ls -ldZ "$version_dir" "$controlcenter_index" || {
+      validation_fail "ls -ldZ failed"
+      return 1
+    }
+  else
+    echo "  ls -ld $version_dir $controlcenter_index"
+    ls -ld "$version_dir" "$controlcenter_index" || {
+      validation_fail "ls -ld failed"
+      return 1
+    }
+  fi
+
+  if selinux_management_enabled && selinux_active; then
+    version_type="$(selinux_type "$version_dir" || true)"
+    index_type="$(selinux_type "$controlcenter_index" || true)"
+    [[ "$version_type" == "httpd_sys_content_t" ]] || {
+      validation_fail "$version_dir has SELinux type '${version_type:-unknown}', expected httpd_sys_content_t"
+      return 1
+    }
+    [[ "$index_type" == "httpd_sys_content_t" ]] || {
+      validation_fail "$controlcenter_index has SELinux type '${index_type:-unknown}', expected httpd_sys_content_t"
+      return 1
+    }
+
+    tmp_scan="$(mktemp)"
+    _TMPFILES+=("$tmp_scan")
+    if find "$version_dir" -context '*:user_tmp_t:*' -print -quit >"$tmp_scan" 2>/dev/null; then
+      if [[ -s "$tmp_scan" ]]; then
+        local bad_path
+        bad_path="$(head -n 1 "$tmp_scan")"
+        validation_fail "user_tmp_t remains under new version: $bad_path"
+        return 1
+      fi
+    else
+      validation_fail "could not scan for user_tmp_t labels under $version_dir"
+      return 1
+    fi
+    while IFS= read -r writable_path; do
+      writable_type="$(selinux_type "$writable_path" || true)"
+      [[ "$writable_type" == "httpd_sys_rw_content_t" ]] || {
+        validation_fail "$writable_path has SELinux type '${writable_type:-unknown}', expected httpd_sys_rw_content_t"
+        return 1
+      }
+    done < <(existing_writable_paths)
+    echo "  SELinux labels OK: httpd_sys_content_t, writable paths httpd_sys_rw_content_t, no user_tmp_t under new version."
+  elif ! selinux_management_enabled; then
+    echo "  SELinux management disabled; skipped SELinux type and user_tmp_t assertions."
+  else
+    echo "  SELinux inactive or unavailable; skipped SELinux type assertions."
+  fi
+
+  if ! command -v curl >/dev/null 2>&1; then
+    validation_fail "curl is required for HTTP smoke validation"
+    return 1
+  fi
+  smoke_base="$(infer_http_base_url)" || {
+    validation_fail "could not infer HTTP base URL from REDCAP_ROOT=$REDCAP_ROOT"
+    return 1
+  }
+  smoke_url="${smoke_base}/redcap_v${TARGET_VERSION}/ControlCenter/index.php"
+
+  echo "  HTTP smoke: $smoke_url"
+  http_code="$(curl -k -sS -o /dev/null -w '%{http_code}' --connect-timeout 10 --max-time 30 --noproxy '*' "$smoke_url" || true)"
+  case "$http_code" in
+    2*|3*)
+      echo "  HTTP smoke OK: $http_code"
+      ;;
+    *)
+      validation_fail "HTTP smoke check returned '${http_code:-curl failed}' for $smoke_url"
+      return 1
+      ;;
+  esac
+
+  echo "Post-upgrade validation passed."
+}
+
 # ── Step 1: Get current version ────────────────────────────────────────────────
 echo "Determining current REDCap version from database..."
 CURRENT_VERSION="$(get_current_version)"
@@ -562,15 +868,12 @@ except Exception:
     exit 1
   fi
 
-  if [[ -d "$VERSION_DIR" ]]; then
-    echo "Removing existing $VERSION_DIR ..."
-    rm -rf "$VERSION_DIR"
-  fi
-
-  mv "$SRC_DIR" "$VERSION_DIR"
-  echo "Installed: $VERSION_DIR"
+  install_version_tree "$SRC_DIR" "$VERSION_DIR"
   echo ""
 fi
+
+sync_version_owner_group "$VERSION_DIR"
+apply_selinux_labels "$VERSION_DIR"
 
 # ── Step 5: Validate upgrade.php exists ───────────────────────────────────────
 UPGRADE_PHP="$VERSION_DIR/upgrade.php"
@@ -671,6 +974,8 @@ else
   exit 1
 fi
 
+validate_post_upgrade "$VERSION_DIR"
+
 # ── Post-upgrade: check web server write permissions ──────────────────────────
 # The web server should never have write access to REDCAP_ROOT (except temp/).
 # If it does, REDCap files could be tampered with via an exploited vulnerability.
@@ -758,157 +1063,6 @@ check_webserver_permissions() {
 }
 
 check_webserver_permissions
-
-# ── Post-upgrade: check SELinux contexts ──────────────────────────────────────
-# If SELinux is Enforcing or Permissive (audit), the httpd context on REDCAP_ROOT
-# should be httpd_sys_content_t (read-only). If it is a writable type, or the
-# httpd_unified boolean is on, Apache can write to the webroot.
-check_selinux_permissions() {
-  command -v getenforce >/dev/null 2>&1 || return 0
-  local selinux_mode
-  selinux_mode="$(getenforce 2>/dev/null || true)"
-  [[ "$selinux_mode" == "Enforcing" || "$selinux_mode" == "Permissive" ]] || return 0
-
-  # Get the SELinux type label on REDCAP_ROOT (format: user:role:type:level)
-  local context selinux_type
-  context="$(stat -c '%C' "$REDCAP_ROOT" 2>/dev/null || true)"
-  [[ -z "$context" ]] && return 0
-  selinux_type="$(echo "$context" | cut -d: -f3)"
-
-  # Types that grant httpd write access to the directory
-  local has_write_type=false
-  case "$selinux_type" in
-    httpd_sys_rw_content_t|httpd_sys_ra_content_t|public_content_rw_t|\
-    httpd_user_rw_content_t|httpd_sys_script_rw_t|var_t|tmp_t|unlabeled_t)
-      has_write_type=true ;;
-  esac
-
-  # httpd_unified ON means httpd treats all httpd_* types as fully accessible
-  local httpd_unified=false
-  if command -v getsebool >/dev/null 2>/dev/null; then
-    getsebool httpd_unified 2>/dev/null | grep -q -- '--> on$' && httpd_unified=true
-  fi
-
-  $has_write_type || $httpd_unified || {
-    echo "  SELinux ($selinux_mode): context OK ($selinux_type)"
-    return 0
-  }
-
-  local reason=""
-  $has_write_type  && reason="context type '$selinux_type' grants httpd write access"
-  $httpd_unified   && reason="${reason:+$reason; }boolean 'httpd_unified' is ON"
-
-  echo ""
-  echo "╔══════════════════════════════════════════════════════════════════════════╗"
-  echo "║                                                                          ║"
-  echo "║   !!!  DANGER: SELinux ALLOWS HTTPD WRITE ACCESS TO REDCAP ROOT  !!!    ║"
-  echo "║                                                                          ║"
-  printf "║   SELinux mode  : %-54s ║\n" "$selinux_mode"
-  printf "║   Directory     : %-54s ║\n" "$REDCAP_ROOT"
-  printf "║   Context type  : %-54s ║\n" "$selinux_type"
-  printf "║   Reason        : %-54s ║\n" "$reason"
-  echo "║                                                                          ║"
-  echo "║   Apache (httpd) can WRITE to the REDCap webroot via SELinux policy.    ║"
-  echo "║   A vulnerability in REDCap or PHP could allow file modification or     ║"
-  echo "║   backdoor injection even if Unix permissions are correct.              ║"
-  echo "║                                                                          ║"
-  echo "║   Correct contexts:                                                      ║"
-  echo "║     REDCAP_ROOT   → httpd_sys_content_t     (read-only for httpd)       ║"
-  echo "║     temp/         → httpd_sys_rw_content_t  (writable for httpd)        ║"
-  echo "║                                                                          ║"
-  echo "╚══════════════════════════════════════════════════════════════════════════╝"
-  echo ""
-
-  read -r -p "Fix SELinux contexts now? [y/N]: " fix_sel
-  echo ""
-  [[ "$fix_sel" =~ ^[Yy]$ ]] || { echo "SELinux contexts NOT changed."; return 0; }
-
-  echo "┌─────────────────────────────────────────────────────────────────────────────"
-  echo "│  IMPORTANT — READ BEFORE CONTINUING"
-  echo "│"
-  echo "│  This will run the following commands against your live system:"
-  echo "│"
-  echo "│    chcon -R -t httpd_sys_content_t    $REDCAP_ROOT"
-  [[ -d "$REDCAP_ROOT/temp" ]] && \
-  echo "│    chcon -R -t httpd_sys_rw_content_t $REDCAP_ROOT/temp"
-  echo "│"
-  if command -v semanage >/dev/null 2>&1; then
-  echo "│    semanage fcontext -a/-m  (makes contexts survive restorecon / OS relabel)"
-  fi
-  echo "│"
-  if $httpd_unified; then
-  echo "│    setsebool -P httpd_unified off  (persistent — affects ALL httpd vhosts)"
-  echo "│"
-  echo "│  NOTE: Disabling httpd_unified affects every virtual host on this machine,"
-  echo "│  not just REDCap. If any other web app on this server relies on the unified"
-  echo "│  boolean being ON, it may break. Verify with your hosting team first."
-  echo "│"
-  fi
-  echo "│  chcon / semanage changes are system-wide and cannot be rolled back"
-  echo "│  automatically. If something breaks, restore contexts with:"
-  echo "│    restorecon -Rv $REDCAP_ROOT"
-  echo "│"
-  echo "│  Only proceed if you understand SELinux context management and have"
-  echo "│  verified these changes are appropriate for this server."
-  echo "└─────────────────────────────────────────────────────────────────────────────"
-  echo ""
-  read -r -p "  Type YES to confirm and apply SELinux context changes: " confirm_sel
-  echo ""
-  if [[ "$confirm_sel" != "YES" ]]; then
-    echo "SELinux contexts NOT changed."
-    return 0
-  fi
-
-  if ! command -v chcon >/dev/null 2>&1; then
-    echo "ERROR: chcon not found — cannot set SELinux contexts." >&2
-    return 1
-  fi
-
-  echo "Setting SELinux contexts... (this may take a minute)"
-
-  # Turn off httpd_unified if it was the problem
-  if $httpd_unified && command -v setsebool >/dev/null 2>&1; then
-    echo "  [$(date +%H:%M:%S)] 1/3: Disabling httpd_unified boolean (persistent)..."
-    setsebool -P httpd_unified off 2>/dev/null && \
-      echo "    httpd_unified → off" || \
-      echo "    WARNING: Could not disable httpd_unified boolean." >&2
-  fi
-
-  # Apply contexts immediately with chcon
-  echo "  [$(date +%H:%M:%S)] 2/3: Applying immediate contexts via chcon..."
-  chcon -R -t httpd_sys_content_t    "$REDCAP_ROOT"       2>/dev/null || true
-  if [[ -d "$REDCAP_ROOT/temp" ]]; then
-    chcon -R -t httpd_sys_rw_content_t "$REDCAP_ROOT/temp" 2>/dev/null || true
-  fi
-
-  # Make contexts survive a relabel (restorecon) via semanage fcontext
-  if command -v semanage >/dev/null 2>&1; then
-    echo "  [$(date +%H:%M:%S)] 3/3: Registering persistent contexts via semanage..."
-    echo "             (This triggers a policy rebuild and can be VERY slow; please wait)"
-    # Add/update the root rule (most specific last wins on overlap)
-    semanage fcontext -a -t httpd_sys_content_t    "${REDCAP_ROOT}(/.*)?" 2>/dev/null || \
-      semanage fcontext -m -t httpd_sys_content_t  "${REDCAP_ROOT}(/.*)?" 2>/dev/null || true
-    if [[ -d "$REDCAP_ROOT/temp" ]]; then
-      # More-specific temp rule overrides the root rule
-      semanage fcontext -a -t httpd_sys_rw_content_t    "${REDCAP_ROOT}/temp(/.*)?" 2>/dev/null || \
-        semanage fcontext -m -t httpd_sys_rw_content_t  "${REDCAP_ROOT}/temp(/.*)?" 2>/dev/null || true
-    fi
-    echo "    Contexts registered successfully."
-  else
-    echo "  WARNING: semanage not found — chcon changes won't survive restorecon/relabel."
-    echo "  Install policycoreutils-python-utils to make contexts permanent."
-  fi
-
-  echo "  [$(date +%H:%M:%S)] Done."
-  echo ""
-  echo "  $REDCAP_ROOT        → httpd_sys_content_t    (read-only for httpd)"
-  [[ -d "$REDCAP_ROOT/temp" ]] && \
-    echo "  $REDCAP_ROOT/temp/  → httpd_sys_rw_content_t (writable for httpd)"
-  echo ""
-  echo "SELinux contexts updated. Verify with: ls -Z $REDCAP_ROOT"
-}
-
-check_selinux_permissions
 
 # ── Post-upgrade: offer to delete old redcap_v* directories ───────────────────
 # Reads the deletion conditions directly from the newly installed check.php so

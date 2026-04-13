@@ -69,9 +69,10 @@ The script will:
 2. Call the consortium endpoint to discover newer versions.
 3. Let you **select a target version** from the list.
 4. Download and install the new `redcap_v<VERSION>/` directory.
-5. Generate and execute the same upgrade SQL that `upgrade.php` would run.
-6. Offer to tighten Unix permissions and SELinux contexts on the webroot.
-7. Prompt to delete old `redcap_v*` directories flagged by `check.php`.
+5. Preserve installed metadata, match owner/group to the existing working version, and relabel the new tree for SELinux.
+6. Generate and execute the same upgrade SQL that `upgrade.php` would run.
+7. Validate the new `ControlCenter/index.php` path, SELinux labels, absence of `user_tmp_t`, and HTTP reachability.
+8. Prompt to delete old `redcap_v*` directories flagged by `check.php`.
 
 A timestamped log of the full run is written to `logs/upgrade_YYYYMMDD_HHMMSS.log`.
 
@@ -110,6 +111,66 @@ Environment variables always take precedence over values in `redcap_easy_upgrade
 
 ---
 
+### SELinux and HTTP validation
+
+The install step uses `rsync -aAX` when available, falling back to `cp -a`, so file modes,
+ACLs, and xattrs from the extracted REDCap package are preserved before the script applies
+site-specific owner/group and SELinux labels.
+
+For SELinux systems, the script prefers persistent `semanage fcontext` rules followed by
+`restorecon -RFv` on the new `redcap_v<VERSION>/` directory. Writable REDCap paths listed
+in `REDCAP_UPGRADE_WRITABLE_PATHS` are labeled `httpd_sys_rw_content_t` when they exist:
+
+```bash
+REDCAP_UPGRADE_MANAGE_SELINUX="true"
+REDCAP_UPGRADE_WRITABLE_PATHS="temp edocs file_repository upload uploads cache"
+```
+
+Set `REDCAP_UPGRADE_MANAGE_SELINUX="false"` to skip all SELinux labeling and SELinux
+validation. The default is `true`, including when the setting is absent from an existing
+local config.
+
+Set the HTTP base URL if localhost inference is not correct for your Apache vhost:
+
+```bash
+REDCAP_UPGRADE_HTTP_BASE_URL="https://redcap.example.edu/redcap"
+```
+
+Example validation output:
+
+```text
+Installing with metadata-preserving copy...
+  Using: rsync -aAX
+Installed: /var/www/html/redcap/redcap_v17.0.1
+Matching owner/group to existing REDCap version directories: 0:0
+Applying SELinux labels for /var/www/html/redcap/redcap_v17.0.1 (mode: Enforcing)...
+  Registering persistent fcontext rules with semanage...
+  Registering writable fcontext: /var/www/html/redcap/temp -> httpd_sys_rw_content_t
+  Restoring contexts with restorecon...
+
+Post-upgrade validation...
+  namei -l /var/www/html/redcap/redcap_v17.0.1/ControlCenter/index.php
+  ls -ldZ /var/www/html/redcap/redcap_v17.0.1 /var/www/html/redcap/redcap_v17.0.1/ControlCenter/index.php
+  SELinux labels OK: httpd_sys_content_t, writable paths httpd_sys_rw_content_t, no user_tmp_t under new version.
+  HTTP smoke: http://127.0.0.1/redcap/redcap_v17.0.1/ControlCenter/index.php
+  HTTP smoke OK: 302
+Post-upgrade validation passed.
+```
+
+If validation fails, the script stops before old-version cleanup and prints remediation
+commands for the fcontext rule, `restorecon`, writable path labels, and HTTP base URL.
+
+Idempotency and rollback behavior:
+
+- Re-running against an existing version with download skipped re-applies owner/group,
+  SELinux labeling and validation when `REDCAP_UPGRADE_MANAGE_SELINUX` is enabled.
+- Re-downloading over an existing target preserves the previous target directory as
+  `redcap_v<VERSION>.pre-upgrade.<timestamp>` before moving the staged copy into place.
+- The script does not roll back database changes after upgrade SQL has executed; restore
+  from your database backup if SQL succeeded but later validation exposes an environment issue.
+
+---
+
 ### Logs
 
 Every run writes a log to `logs/upgrade_YYYYMMDD_HHMMSS.log`. All stdout and stderr are
@@ -125,5 +186,6 @@ captured. Passwords typed at interactive prompts are **not** written to the log.
 - If your server uses an outbound proxy, set `REDCAP_UPGRADE_PROXY=http://proxy.example.com:3128`
   in your `.conf` file (or via the standard `https_proxy` / `HTTPS_PROXY` environment variables)
   so curl can reach `https://redcap.vumc.org`.
-- The SELinux fix prompt requires typing `YES` and shows exactly which commands will run
-  before applying any changes.
+- On SELinux systems, install `policycoreutils-python-utils` so `semanage` is available
+  and REDCap labels survive relabels. Without it, the script falls back to non-persistent
+  `chcon` labels and validation will still run.

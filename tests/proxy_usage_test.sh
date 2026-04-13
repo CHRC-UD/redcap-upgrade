@@ -103,3 +103,30 @@ FUNCS
   grep -Fx -- "--proxy" "$tmpdir/curl.args" >/dev/null
   grep -Fx -- "http://proxy.example.com:3128" "$tmpdir/curl.args" >/dev/null
 '
+
+run_bash_test "fcontext_path_regex escapes REDCap version dots" '
+  set -euo pipefail
+
+  source /dev/stdin <<'\''FUNCS'\''
+'"$(extract_function fcontext_path_regex)"'
+FUNCS
+
+  got="$(fcontext_path_regex "/var/www/html/redcap/redcap_v17.0.1")"
+  test "$got" = "/var/www/html/redcap/redcap_v17\\.0\\.1"
+'
+
+run_bash_test "selinux_management_enabled treats false as disabled" '
+  set -euo pipefail
+
+  source /dev/stdin <<'\''FUNCS'\''
+'"$(extract_function selinux_management_enabled)"'
+FUNCS
+
+  REDCAP_UPGRADE_MANAGE_SELINUX=false
+  if selinux_management_enabled; then
+    exit 1
+  fi
+
+  REDCAP_UPGRADE_MANAGE_SELINUX=true
+  selinux_management_enabled
+'

@@ -81,6 +81,29 @@ REDCAP_UPGRADE_PROXY=""
 
 
 # -----------------------------------------------------------------------------
+# Post-upgrade HTTP smoke check
+# URL that maps to REDCAP_ROOT. Leave blank to infer http://127.0.0.1/redcap
+# when REDCAP_ROOT is /var/www/html/redcap. Set this if your local vhost needs
+# HTTPS, a hostname, a non-standard path, or a front-end proxy.
+# -----------------------------------------------------------------------------
+REDCAP_UPGRADE_HTTP_BASE_URL=""
+
+
+# -----------------------------------------------------------------------------
+# SELinux writable REDCap paths
+# Set REDCAP_UPGRADE_MANAGE_SELINUX=false to skip all SELinux labeling and
+# SELinux validation. The default is true because SELinux mislabels can cause
+# Apache blank pages even when Unix permissions are correct.
+#
+# Space-separated paths relative to REDCAP_ROOT that should be writable by
+# httpd/php-fpm and labeled httpd_sys_rw_content_t when they exist.
+# Keep this list aligned with your REDCap storage and cache configuration.
+# -----------------------------------------------------------------------------
+REDCAP_UPGRADE_MANAGE_SELINUX="true"
+REDCAP_UPGRADE_WRITABLE_PATHS="temp edocs file_repository upload uploads cache"
+
+
+# -----------------------------------------------------------------------------
 # Safety — web server service accounts that must NOT run this script.
 # Space-separated list. Add your site's account name if it differs.
 # -----------------------------------------------------------------------------
