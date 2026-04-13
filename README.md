@@ -118,7 +118,7 @@ ACLs, and xattrs from the extracted REDCap package are preserved before the scri
 site-specific owner/group and SELinux labels.
 
 For SELinux systems, the script prefers persistent `semanage fcontext` rules followed by
-`restorecon -RFv` on the new `redcap_v<VERSION>/` directory. Writable REDCap paths listed
+`restorecon -RF` on the new `redcap_v<VERSION>/` directory. Writable REDCap paths listed
 in `REDCAP_UPGRADE_WRITABLE_PATHS` are labeled `httpd_sys_rw_content_t` when they exist:
 
 ```bash
@@ -144,9 +144,10 @@ Installing with metadata-preserving copy...
 Installed: /var/www/html/redcap/redcap_v17.0.1
 Matching owner/group to existing REDCap version directories: 0:0
 Applying SELinux labels for /var/www/html/redcap/redcap_v17.0.1 (mode: Enforcing)...
-  Registering persistent fcontext rules with semanage...
-  Registering writable fcontext: /var/www/html/redcap/temp -> httpd_sys_rw_content_t
-  Restoring contexts with restorecon...
+  Updating persistent SELinux rules...
+  Updating writable SELinux rule: /var/www/html/redcap/temp
+  Relabeling: /var/www/html/redcap/redcap_v17.0.1
+  Relabeling writable path: /var/www/html/redcap/temp
 
 Post-upgrade validation...
   namei -l /var/www/html/redcap/redcap_v17.0.1/ControlCenter/index.php

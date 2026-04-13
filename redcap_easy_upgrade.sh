@@ -491,19 +491,20 @@ apply_selinux_labels() {
     local version_regex
     version_regex="$(fcontext_path_regex "$version_dir")"
 
-    echo "  Registering persistent fcontext rules with semanage..."
+    echo "  Updating persistent SELinux rules..."
     set_fcontext_tree_rule httpd_sys_content_t "$version_regex"
 
     local writable_path
     while IFS= read -r writable_path; do
-      echo "  Registering writable fcontext: $writable_path -> httpd_sys_rw_content_t"
+      echo "  Updating writable SELinux rule: $writable_path"
       set_fcontext_tree_rule httpd_sys_rw_content_t "$(fcontext_path_regex "$writable_path")"
     done < <(existing_writable_paths)
 
-    echo "  Restoring contexts with restorecon..."
-    restorecon -RFv "$version_dir"
+    echo "  Relabeling: $version_dir"
+    restorecon -RF "$version_dir"
     while IFS= read -r writable_path; do
-      restorecon -RFv "$writable_path"
+      echo "  Relabeling writable path: $writable_path"
+      restorecon -RF "$writable_path"
     done < <(existing_writable_paths)
   elif command -v chcon >/dev/null 2>&1; then
     echo "  WARNING: semanage/restorecon unavailable; using chcon fallback."
@@ -548,7 +549,7 @@ validation_fail() {
   if selinux_management_enabled; then
     echo "  2. Ensure persistent SELinux rules exist, for example:" >&2
     echo "       semanage fcontext -a -t httpd_sys_content_t '${version_regex}(/.*)?'" >&2
-    echo "       restorecon -RFv '$VERSION_DIR'" >&2
+    echo "       restorecon -RF '$VERSION_DIR'" >&2
     echo "  3. Keep writable REDCap paths labeled httpd_sys_rw_content_t:" >&2
     echo "       REDCAP_UPGRADE_WRITABLE_PATHS=\"$REDCAP_UPGRADE_WRITABLE_PATHS\"" >&2
     echo "  4. If the HTTP smoke URL is wrong, set REDCAP_UPGRADE_HTTP_BASE_URL in redcap_easy_upgrade.conf." >&2
