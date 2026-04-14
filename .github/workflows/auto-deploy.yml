@@ -1,0 +1,24 @@
+name: Auto deploy from main
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: deploy-main
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: [self-hosted, Linux, X64]
+
+    steps:
+      - name: Sync repo to latest main
+        run: |
+          set -euo pipefail
+          flock /tmp/deploy-main.lock bash -c '
+            cd /opt/redcap/your-repo
+            git fetch origin main
+            git reset --hard origin/main
+            git clean -fd
+          '
