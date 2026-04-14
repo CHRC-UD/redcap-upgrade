@@ -17,7 +17,7 @@ jobs:
         run: |
           set -euo pipefail
           flock /tmp/deploy-main.lock bash -c '
-            cd /opt/redcap/your-repo
+            cd /opt/redcap/redcap-upgrade
             git fetch origin main
             git reset --hard origin/main
             git clean -fd
