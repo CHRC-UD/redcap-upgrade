@@ -10,7 +10,16 @@ concurrency:
 
 jobs:
   deploy:
-    runs-on: [self-hosted, Linux, X64]
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        server:
+          - dev-db-redcap
+          - dev-web-redcap
+
+    name: Sync repo to latest master (${{ matrix.server }})
+    runs-on: [self-hosted, Linux, X64, dev]
 
     steps:
       - name: Sync repo to latest master
