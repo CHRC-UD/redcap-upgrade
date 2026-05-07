@@ -93,6 +93,7 @@ fi
 [[ -z "${REDCAP_UPGRADE_WRITABLE_PATHS:-}"  ]] && REDCAP_UPGRADE_WRITABLE_PATHS="temp edocs file_repository upload uploads cache"
 [[ -z "${REDCAP_UPGRADE_HTTP_SMOKE_CHECK:-}" ]] && REDCAP_UPGRADE_HTTP_SMOKE_CHECK="true"
 [[ -z "${REDCAP_UPGRADE_HTTP_BASE_URL:-}"   ]] && REDCAP_UPGRADE_HTTP_BASE_URL=""
+[[ -z "${REDCAP_UPGRADE_POST_SCRIPT:-}"     ]] && REDCAP_UPGRADE_POST_SCRIPT=""
 # All other vars (credentials, MySQL, SSL, proxy) default to empty — prompts or
 # auto-detection handle them later in the script.
 
@@ -1207,3 +1208,23 @@ PHPEOF
 }
 
 check_old_version_dirs
+
+# ── Step 8: Run post-upgrade custom script ────────────────────────────────────
+if [[ -n "$REDCAP_UPGRADE_POST_SCRIPT" ]]; then
+  echo "Running post-upgrade custom script: $REDCAP_UPGRADE_POST_SCRIPT"
+  if [[ -f "$REDCAP_UPGRADE_POST_SCRIPT" ]]; then
+    if [[ -x "$REDCAP_UPGRADE_POST_SCRIPT" ]]; then
+      # Run the script and let its output go to the log (already tee'd)
+      if "$REDCAP_UPGRADE_POST_SCRIPT"; then
+        echo "Post-upgrade script completed successfully."
+      else
+        echo "WARNING: Post-upgrade script exited with an error (exit code $?)." >&2
+      fi
+    else
+      echo "ERROR: Post-upgrade script is not executable: $REDCAP_UPGRADE_POST_SCRIPT" >&2
+    fi
+  else
+    echo "ERROR: Post-upgrade script not found: $REDCAP_UPGRADE_POST_SCRIPT" >&2
+  fi
+  echo ""
+fi

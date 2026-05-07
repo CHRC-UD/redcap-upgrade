@@ -112,3 +112,11 @@ REDCAP_UPGRADE_WRITABLE_PATHS="temp edocs file_repository upload uploads cache"
 # Space-separated list. Add your site's account name if it differs.
 # -----------------------------------------------------------------------------
 REDCAP_UPGRADE_FORBIDDEN_USERS="apache www-data wwwrun nginx"
+
+
+# -----------------------------------------------------------------------------
+# Post-upgrade custom script
+# Full path to a script to execute after a successful upgrade.
+# The script is called with no arguments. All output is captured in the log.
+# -----------------------------------------------------------------------------
+#REDCAP_UPGRADE_POST_SCRIPT="/opt/redcap/redcap-scripts/rc_post_upgrade.sh"
