@@ -168,6 +168,36 @@ if [[ -d "$UPGRADE_LOG_DIR" ]]; then
   echo ""
 fi
 
+run_with_progress() {
+  local description="$1"
+  shift
+
+  local pid start now elapsed
+  start="$(date +%s)"
+  "$@" &
+  pid="$!"
+
+  while kill -0 "$pid" 2>/dev/null; do
+    sleep 10
+    if kill -0 "$pid" 2>/dev/null; then
+      now="$(date +%s)"
+      elapsed=$((now - start))
+      echo "  Still running: $description (${elapsed}s elapsed)"
+    fi
+  done
+
+  if wait "$pid"; then
+    now="$(date +%s)"
+    elapsed=$((now - start))
+    echo "  Completed: $description (${elapsed}s elapsed)"
+    return 0
+  fi
+
+  local status="$?"
+  echo "  FAILED: $description" >&2
+  return "$status"
+}
+
 # ── Get the current REDCap version from the database (via redcap_connect.php) ─
 # This mirrors Upgrade::fetchREDCapVersionUpdatesList() which passes REDCAP_VERSION.
 get_current_version() {
@@ -417,7 +447,7 @@ sync_version_owner_group() {
   local owner_group
   owner_group="$(reference_version_owner_group)"
   echo "Matching owner/group to existing REDCap version directories: $owner_group"
-  chown -R "$owner_group" "$version_dir"
+  run_with_progress "chown -R $owner_group $version_dir" chown -R "$owner_group" "$version_dir"
 }
 
 selinux_mode() {
@@ -503,20 +533,20 @@ apply_selinux_labels() {
     done < <(existing_writable_paths)
 
     echo "  Relabeling: $version_dir"
-    restorecon -RF "$version_dir"
+    run_with_progress "restorecon -RF $version_dir" restorecon -RF "$version_dir"
     while IFS= read -r writable_path; do
       echo "  Relabeling writable path: $writable_path"
-      restorecon -RF "$writable_path"
+      run_with_progress "restorecon -RF $writable_path" restorecon -RF "$writable_path"
     done < <(existing_writable_paths)
   elif command -v chcon >/dev/null 2>&1; then
     echo "  WARNING: semanage/restorecon unavailable; using chcon fallback."
     echo "  WARNING: chcon labels are not persistent across a filesystem relabel."
-    chcon -R -t httpd_sys_content_t "$version_dir"
+    run_with_progress "chcon -R -t httpd_sys_content_t $version_dir" chcon -R -t httpd_sys_content_t "$version_dir"
 
     local writable_path
     while IFS= read -r writable_path; do
       echo "  Applying writable label: $writable_path -> httpd_sys_rw_content_t"
-      chcon -R -t httpd_sys_rw_content_t "$writable_path"
+      run_with_progress "chcon -R -t httpd_sys_rw_content_t $writable_path" chcon -R -t httpd_sys_rw_content_t "$writable_path"
     done < <(existing_writable_paths)
   else
     echo "ERROR: SELinux is active, but semanage/restorecon or chcon is not available." >&2
