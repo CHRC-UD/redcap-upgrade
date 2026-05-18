@@ -77,6 +77,70 @@ FUNCS
   fi
 '
 
+run_bash_test "get_current_version rejects REDCap offline HTML as local database failure" '
+  set -euo pipefail
+  tmpdir="$(mktemp -d)"
+  trap '\''rm -rf "$tmpdir"'\'' EXIT
+
+  mkdir -p "$tmpdir/redcap"
+  : > "$tmpdir/redcap/redcap_connect.php"
+
+  cat > "$tmpdir/php" <<'\''EOF'\''
+#!/usr/bin/env bash
+cat <<'\''HTML'\''
+<div>
+  CRITICAL ERROR: REDCap server is offline!
+  database.php could not connect to the database server.
+</div>
+HTML
+exit 2
+EOF
+  chmod +x "$tmpdir/php"
+
+  export PATH="$tmpdir:$PATH"
+  export REDCAP_ROOT="$tmpdir/redcap"
+
+  source /dev/stdin <<'\''FUNCS'\''
+'"$(extract_function is_redcap_version)"'
+'"$(extract_function get_current_version)"'
+FUNCS
+
+  if get_current_version > "$tmpdir/out" 2> "$tmpdir/err"; then
+    exit 1
+  fi
+  grep -F "Could not determine current REDCap version" "$tmpdir/err" >/dev/null
+  grep -F "local REDCap app cannot reach its database" "$tmpdir/err" >/dev/null
+  if grep -F "VUMC" "$tmpdir/err" >/dev/null; then
+    exit 1
+  fi
+'
+
+run_bash_test "get_current_version accepts a valid REDCap version" '
+  set -euo pipefail
+  tmpdir="$(mktemp -d)"
+  trap '\''rm -rf "$tmpdir"'\'' EXIT
+
+  mkdir -p "$tmpdir/redcap"
+  : > "$tmpdir/redcap/redcap_connect.php"
+
+  cat > "$tmpdir/php" <<'\''EOF'\''
+#!/usr/bin/env bash
+printf "17.0.8"
+EOF
+  chmod +x "$tmpdir/php"
+
+  export PATH="$tmpdir:$PATH"
+  export REDCAP_ROOT="$tmpdir/redcap"
+
+  source /dev/stdin <<'\''FUNCS'\''
+'"$(extract_function is_redcap_version)"'
+'"$(extract_function get_current_version)"'
+FUNCS
+
+  got="$(get_current_version)"
+  test "$got" = "17.0.8"
+'
+
 run_bash_test "download_version_zip uses configured proxy" '
   set -euo pipefail
   tmpdir="$(mktemp -d)"

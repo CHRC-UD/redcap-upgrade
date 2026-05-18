@@ -200,18 +200,50 @@ run_with_progress() {
 
 # ── Get the current REDCap version from the database (via redcap_connect.php) ─
 # This mirrors Upgrade::fetchREDCapVersionUpdatesList() which passes REDCAP_VERSION.
+is_redcap_version() {
+  [[ "${1:-}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+}
+
 get_current_version() {
-  local v=""
-  if command -v php >/dev/null 2>&1 && [[ -f "$REDCAP_ROOT/redcap_connect.php" ]]; then
-    v="$(cd "$REDCAP_ROOT" && php -d display_errors=0 -r '
+  local output status
+
+  if ! command -v php >/dev/null 2>&1; then
+    echo "ERROR: php CLI is required to determine the current REDCap version." >&2
+    return 1
+  fi
+
+  if [[ ! -f "$REDCAP_ROOT/redcap_connect.php" ]]; then
+    echo "ERROR: REDCap connection file not found: $REDCAP_ROOT/redcap_connect.php" >&2
+    return 1
+  fi
+
+  set +e
+  output="$(cd "$REDCAP_ROOT" && php -d display_errors=0 -r '
       define("REDCAP_CONNECT_NONVERSIONED", true);
+      ob_start();
       @require "redcap_connect.php";
+      ob_end_clean();
       if (isset($redcap_version) && preg_match("/^[0-9]+\.[0-9]+\.[0-9]+$/", $redcap_version)) {
         echo $redcap_version;
+        exit(0);
       }
-    ' 2>/dev/null || true)"
+      exit(2);
+    ' 2>&1)"
+  status=$?
+  set -e
+
+  if [[ $status -ne 0 ]] || ! is_redcap_version "$output"; then
+    echo "ERROR: Could not determine current REDCap version from $REDCAP_ROOT/redcap_connect.php." >&2
+    echo "  REDCap did not return a valid version number. This usually means the local REDCap app cannot reach its database." >&2
+    echo "  Check the database service and $REDCAP_ROOT/database.php before retrying." >&2
+    if [[ -n "$output" ]]; then
+      echo "  PHP output follows:" >&2
+      printf '%s\n' "$output" | sed 's/^/    /' >&2
+    fi
+    return 1
   fi
-  printf '%s' "${v:-0.0.0}"
+
+  printf '%s' "$output"
 }
 
 # ── Read MySQL credentials from database.php + redcap_config ──────────────────
