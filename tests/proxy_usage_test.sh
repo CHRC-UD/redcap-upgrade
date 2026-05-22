@@ -211,6 +211,40 @@ FUNCS
   http_smoke_check_enabled
 '
 
+run_bash_test "confirm_privileged_run warns non-root non-sudo users and allows confirmation" '
+  set -euo pipefail
+  TMPDIR="$(mktemp -d)"
+  trap '\''rm -rf "$TMPDIR"'\'' EXIT
+
+  source /dev/stdin <<'\''FUNCS'\''
+'"$(extract_function confirm_privileged_run)"'
+FUNCS
+
+  printf "y\n" | confirm_privileged_run "deploy" "1001" >"$TMPDIR/confirm.out" 2>&1
+  grep -F -- "WARNING: This upgrade is normally run as root or with sudo." "$TMPDIR/confirm.out" >/dev/null
+  grep -F -- "Current user deploy must already have permission" "$TMPDIR/confirm.out" >/dev/null
+
+  if printf "n\n" | confirm_privileged_run "deploy" "1001" >/dev/null 2>&1; then
+    exit 1
+  fi
+'
+
+run_bash_test "confirm_privileged_run does not warn when effective uid is root" '
+  set -euo pipefail
+  TMPDIR="$(mktemp -d)"
+  trap '\''rm -rf "$TMPDIR"'\'' EXIT
+
+  source /dev/stdin <<'\''FUNCS'\''
+'"$(extract_function confirm_privileged_run)"'
+FUNCS
+
+  confirm_privileged_run "root" "0" >"$TMPDIR/root.out" 2>&1
+  test ! -s "$TMPDIR/root.out"
+
+  confirm_privileged_run "deploy" "0" >"$TMPDIR/sudo.out" 2>&1
+  test ! -s "$TMPDIR/sudo.out"
+'
+
 run_bash_test "install_version_tree succeeds without rollback copy" '
   set -euo pipefail
   tmpdir="$(mktemp -d)"

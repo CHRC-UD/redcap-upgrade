@@ -133,6 +133,24 @@ for arg in "$@"; do
   esac
 done
 
+confirm_privileged_run() {
+  local run_user="$1" run_uid="$2"
+
+  if [[ "$run_uid" == "0" ]]; then
+    return 0
+  fi
+
+  echo "WARNING: This upgrade is normally run as root or with sudo." >&2
+  echo "         Current user ${run_user} must already have permission to read and write REDCap files," >&2
+  echo "         run database upgrades, set ownership, and apply SELinux labels where enabled." >&2
+  echo "" >&2
+  read -r -p "Continue as ${run_user}? [y/N] " confirm
+  case "$confirm" in
+    y|Y|yes|YES) return 0 ;;
+    *) echo "Aborted." >&2; return 1 ;;
+  esac
+}
+
 # ── Safety: refuse to run as web server user ───────────────────────────────────
 RUN_USER="${RUN_USER:-$(whoami 2>/dev/null || id -un 2>/dev/null)}"
 for u in $FORBIDDEN_USERS; do
@@ -141,6 +159,9 @@ for u in $FORBIDDEN_USERS; do
     exit 1
   fi
 done
+
+RUN_UID="${RUN_UID:-$(id -u 2>/dev/null || echo 99999)}"
+confirm_privileged_run "$RUN_USER" "$RUN_UID"
 
 if [[ ! -d "$REDCAP_ROOT" ]]; then
   echo "ERROR: REDCAP_ROOT is not a directory: $REDCAP_ROOT" >&2
