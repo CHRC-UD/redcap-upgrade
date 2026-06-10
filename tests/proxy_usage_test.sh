@@ -211,6 +211,53 @@ FUNCS
   http_smoke_check_enabled
 '
 
+run_bash_test "remove_install_php_files true removes webroot and version installers" '
+  set -euo pipefail
+  tmpdir="$(mktemp -d)"
+  trap '\''rm -rf "$tmpdir"'\'' EXIT
+
+  mkdir -p "$tmpdir/redcap/redcap_v1.2.3" "$tmpdir/redcap/redcap_v1.2.4"
+  : > "$tmpdir/redcap/install.php"
+  : > "$tmpdir/redcap/redcap_v1.2.3/install.php"
+  : > "$tmpdir/redcap/redcap_v1.2.4/install.php"
+
+  export REDCAP_ROOT="$tmpdir/redcap"
+  export REDCAP_UPGRADE_REMOVE_INSTALL_PHP=true
+
+  source /dev/stdin <<'\''FUNCS'\''
+'"$(extract_function remove_install_php_files)"'
+FUNCS
+
+  remove_install_php_files >"$tmpdir/out"
+  grep -F "Removed 3 REDCap install.php file(s)" "$tmpdir/out" >/dev/null
+  test ! -e "$tmpdir/redcap/install.php"
+  test ! -e "$tmpdir/redcap/redcap_v1.2.3/install.php"
+  test ! -e "$tmpdir/redcap/redcap_v1.2.4/install.php"
+'
+
+run_bash_test "remove_install_php_files prompt keeps files when declined" '
+  set -euo pipefail
+  tmpdir="$(mktemp -d)"
+  trap '\''rm -rf "$tmpdir"'\'' EXIT
+
+  mkdir -p "$tmpdir/redcap/redcap_v1.2.3"
+  : > "$tmpdir/redcap/install.php"
+  : > "$tmpdir/redcap/redcap_v1.2.3/install.php"
+
+  export REDCAP_ROOT="$tmpdir/redcap"
+  export REDCAP_UPGRADE_REMOVE_INSTALL_PHP=prompt
+
+  source /dev/stdin <<'\''FUNCS'\''
+'"$(extract_function remove_install_php_files)"'
+FUNCS
+
+  printf "n\n" | remove_install_php_files >"$tmpdir/out"
+  grep -F "Detected 2 REDCap install.php file(s)" "$tmpdir/out" >/dev/null
+  grep -F "Kept detected install.php files." "$tmpdir/out" >/dev/null
+  test -e "$tmpdir/redcap/install.php"
+  test -e "$tmpdir/redcap/redcap_v1.2.3/install.php"
+'
+
 run_bash_test "confirm_privileged_run warns non-root non-sudo users and allows confirmation" '
   set -euo pipefail
   TMPDIR="$(mktemp -d)"

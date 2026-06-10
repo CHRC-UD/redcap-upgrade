@@ -93,6 +93,7 @@ fi
 [[ -z "${REDCAP_UPGRADE_WRITABLE_PATHS:-}"  ]] && REDCAP_UPGRADE_WRITABLE_PATHS="temp edocs file_repository upload uploads cache"
 [[ -z "${REDCAP_UPGRADE_HTTP_SMOKE_CHECK:-}" ]] && REDCAP_UPGRADE_HTTP_SMOKE_CHECK="true"
 [[ -z "${REDCAP_UPGRADE_HTTP_BASE_URL:-}"   ]] && REDCAP_UPGRADE_HTTP_BASE_URL=""
+[[ -z "${REDCAP_UPGRADE_REMOVE_INSTALL_PHP:-}" ]] && REDCAP_UPGRADE_REMOVE_INSTALL_PHP="prompt"
 [[ -z "${REDCAP_UPGRADE_POST_SCRIPT:-}"     ]] && REDCAP_UPGRADE_POST_SCRIPT=""
 # All other vars (credentials, MySQL, SSL, proxy) default to empty — prompts or
 # auto-detection handle them later in the script.
@@ -765,6 +766,70 @@ validate_post_upgrade() {
   echo "Post-upgrade validation passed."
 }
 
+remove_install_php_files() {
+  local mode="${REDCAP_UPGRADE_REMOVE_INSTALL_PHP:-prompt}"
+  local mode_lc="${mode,,}"
+  local -a installers=()
+  local installer count root_installer=false
+
+  case "$mode_lc" in
+    0|false|no|off|disabled|skip)
+      echo "install.php cleanup disabled by REDCAP_UPGRADE_REMOVE_INSTALL_PHP=$REDCAP_UPGRADE_REMOVE_INSTALL_PHP."
+      return 0
+      ;;
+    1|true|yes|on|auto|always|prompt|ask)
+      ;;
+    *)
+      echo "WARNING: Unknown REDCAP_UPGRADE_REMOVE_INSTALL_PHP value '$mode'; using prompt mode." >&2
+      mode_lc="prompt"
+      ;;
+  esac
+
+  mapfile -d '' installers < <(find "$REDCAP_ROOT" -type f -name 'install.php' -print0 2>/dev/null | sort -z)
+  count="${#installers[@]}"
+
+  if [[ "$count" -eq 0 ]]; then
+    echo "No REDCap install.php files found under $REDCAP_ROOT."
+    return 0
+  fi
+
+  echo ""
+  echo "Detected $count REDCap install.php file(s):"
+  for installer in "${installers[@]}"; do
+    if [[ "$installer" == "$REDCAP_ROOT/install.php" ]]; then
+      root_installer=true
+      echo "  $installer  [webroot]"
+    else
+      echo "  $installer"
+    fi
+  done
+
+  if [[ "$mode_lc" == "prompt" || "$mode_lc" == "ask" ]]; then
+    local confirm
+    echo ""
+    if $root_installer; then
+      read -r -p "Delete these install.php files, including the webroot installer? [y/N]: " confirm
+    else
+      read -r -p "Delete these install.php files? [y/N]: " confirm
+    fi
+    echo ""
+    if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+      echo "Kept detected install.php files."
+      return 0
+    fi
+  fi
+
+  local removed=0
+  for installer in "${installers[@]}"; do
+    if rm -f "$installer"; then
+      removed=$((removed + 1))
+    else
+      echo "WARNING: Could not remove $installer" >&2
+    fi
+  done
+  echo "Removed $removed REDCap install.php file(s) from $REDCAP_ROOT."
+}
+
 # ── Step 1: Get current version ────────────────────────────────────────────────
 echo "Determining current REDCap version from database..."
 CURRENT_VERSION="$(get_current_version)"
@@ -1086,6 +1151,7 @@ else
 fi
 
 validate_post_upgrade "$VERSION_DIR"
+remove_install_php_files
 
 # ── Post-upgrade: check web server write permissions ──────────────────────────
 # The web server should never have write access to REDCAP_ROOT (except temp/).

@@ -72,7 +72,8 @@ The script will:
 5. Preserve installed metadata, match owner/group to the existing working version, and relabel the new tree for SELinux.
 6. Generate and execute the same upgrade SQL that `upgrade.php` would run.
 7. Validate the new `ControlCenter/index.php` path, SELinux labels, absence of `user_tmp_t`, and HTTP reachability.
-8. Prompt to delete old `redcap_v*` directories flagged by `check.php`.
+8. Remove or prompt to remove detected `install.php` files under the REDCap webroot.
+9. Prompt to delete old `redcap_v*` directories flagged by `check.php`.
 
 A timestamped log of the full run is written to `logs/upgrade_YYYYMMDD_HHMMSS.log`.
 
@@ -140,6 +141,18 @@ REDCAP_UPGRADE_HTTP_BASE_URL="https://redcap.example.edu/redcap"
 Set `REDCAP_UPGRADE_HTTP_SMOKE_CHECK="false"` to skip the HTTP smoke check on hosts
 where localhost requests are blocked or do not route to the REDCap vhost. The default
 is `true`.
+
+After successful validation, the script can remove REDCap installer files named
+`install.php` from the webroot and version directories, matching the cleanup performed by
+the Ansible `redcap_remove_installers` role:
+
+```bash
+REDCAP_UPGRADE_REMOVE_INSTALL_PHP="true"    # delete without prompting
+REDCAP_UPGRADE_REMOVE_INSTALL_PHP="prompt"  # ask once before deletion
+REDCAP_UPGRADE_REMOVE_INSTALL_PHP="false"   # skip cleanup
+```
+
+When the setting is absent from an existing local config, the script defaults to `prompt`.
 
 Example validation output:
 

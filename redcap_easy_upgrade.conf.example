@@ -94,6 +94,20 @@ REDCAP_UPGRADE_HTTP_BASE_URL=""
 
 
 # -----------------------------------------------------------------------------
+# REDCap install.php cleanup
+# REDCap upgrade packages can leave install.php in the webroot and in version
+# directories. Set to "true" to remove all detected install.php files under
+# REDCAP_ROOT after a successful upgrade and validation without prompting.
+#
+# Supported values:
+#   prompt  - list detected files and ask once before deletion
+#   true    - delete detected files without prompting
+#   false   - skip install.php cleanup
+# -----------------------------------------------------------------------------
+REDCAP_UPGRADE_REMOVE_INSTALL_PHP="true"
+
+
+# -----------------------------------------------------------------------------
 # SELinux writable REDCap paths
 # Set REDCAP_UPGRADE_MANAGE_SELINUX=false to skip all SELinux labeling and
 # SELinux validation. The default is true because SELinux mislabels can cause
