@@ -752,13 +752,13 @@ validate_post_upgrade() {
   smoke_url="${smoke_base}/redcap_v${TARGET_VERSION}/ControlCenter/index.php"
 
   echo "  HTTP smoke: $smoke_url"
-  http_code="$(curl -k -sS -o /dev/null -w '%{http_code}' --connect-timeout 10 --max-time 30 --noproxy '*' "$smoke_url" || true)"
+  http_code="$(curl -k -L -sS -o /dev/null -w '%{http_code}' --connect-timeout 10 --max-time 30 --noproxy '*' "$smoke_url" || true)"
   case "$http_code" in
     2*|3*)
       echo "  HTTP smoke OK: $http_code"
       ;;
     *)
-      validation_fail "HTTP smoke check returned '${http_code:-curl failed}' for $smoke_url"
+      validation_fail "HTTP smoke check returned '${http_code:-curl failed}' for $smoke_url. If this is a firewall or port issue, you can set REDCAP_UPGRADE_HTTP_BASE_URL in your conf or disable the check."
       return 1
       ;;
   esac
