@@ -258,6 +258,110 @@ FUNCS
   test -e "$tmpdir/redcap/redcap_v1.2.3/install.php"
 '
 
+run_bash_test "check_old_version_dirs warns and stops when retention is blank" '
+  set -euo pipefail
+  tmpdir="$(mktemp -d)"
+  trap '\''rm -rf "$tmpdir"'\'' EXIT
+
+  mkdir -p "$tmpdir/redcap/redcap_v1.0.0" "$tmpdir/redcap/redcap_v1.1.0" "$tmpdir/redcap/redcap_v2.0.0"
+
+  export REDCAP_ROOT="$tmpdir/redcap"
+  export TARGET_VERSION="2.0.0"
+  export REDCAP_UPGRADE_OLD_VERSION_KEEP=""
+  export REDCAP_UPGRADE_OLD_VERSION_ARCHIVE_DIR=""
+  export REDCAP_UPGRADE_OLD_VERSION_DELETE_WITHOUT_PROMPT=false
+
+  source /dev/stdin <<'\''FUNCS'\''
+'"$(extract_function check_old_version_dirs)"'
+FUNCS
+
+  if check_old_version_dirs >"$tmpdir/out" 2>"$tmpdir/err"; then
+    exit 1
+  fi
+  grep -F "WARNING: Old REDCap version retention is not configured." "$tmpdir/err" >/dev/null
+  grep -F "Configure REDCAP_UPGRADE_OLD_VERSION_KEEP in redcap_easy_upgrade.conf" "$tmpdir/err" >/dev/null
+  test -d "$tmpdir/redcap/redcap_v1.0.0"
+  test -d "$tmpdir/redcap/redcap_v1.1.0"
+  test -d "$tmpdir/redcap/redcap_v2.0.0"
+'
+
+run_bash_test "check_old_version_dirs auto deletes oldest versions beyond keep count" '
+  set -euo pipefail
+  tmpdir="$(mktemp -d)"
+  trap '\''rm -rf "$tmpdir"'\'' EXIT
+
+  mkdir -p "$tmpdir/redcap/redcap_v1.0.0" "$tmpdir/redcap/redcap_v1.1.0" "$tmpdir/redcap/redcap_v2.0.0" "$tmpdir/redcap/redcap_v3.0.0"
+
+  export REDCAP_ROOT="$tmpdir/redcap"
+  export TARGET_VERSION="3.0.0"
+  export REDCAP_UPGRADE_OLD_VERSION_KEEP="01"
+  export REDCAP_UPGRADE_OLD_VERSION_ARCHIVE_DIR=""
+  export REDCAP_UPGRADE_OLD_VERSION_DELETE_WITHOUT_PROMPT=true
+
+  source /dev/stdin <<'\''FUNCS'\''
+'"$(extract_function check_old_version_dirs)"'
+FUNCS
+
+  check_old_version_dirs >"$tmpdir/out"
+  grep -F "Keeping newest 1 old version directories; deleting 2 older directories." "$tmpdir/out" >/dev/null
+  test ! -e "$tmpdir/redcap/redcap_v1.0.0"
+  test ! -e "$tmpdir/redcap/redcap_v1.1.0"
+  test -d "$tmpdir/redcap/redcap_v2.0.0"
+  test -d "$tmpdir/redcap/redcap_v3.0.0"
+'
+
+run_bash_test "check_old_version_dirs auto moves oldest versions to archive dir" '
+  set -euo pipefail
+  tmpdir="$(mktemp -d)"
+  trap '\''rm -rf "$tmpdir"'\'' EXIT
+
+  mkdir -p "$tmpdir/redcap/redcap_v1.0.0" "$tmpdir/redcap/redcap_v1.1.0" "$tmpdir/redcap/redcap_v2.0.0" "$tmpdir/redcap/redcap_v3.0.0"
+
+  export REDCAP_ROOT="$tmpdir/redcap"
+  export TARGET_VERSION="3.0.0"
+  export REDCAP_UPGRADE_OLD_VERSION_KEEP="1"
+  export REDCAP_UPGRADE_OLD_VERSION_ARCHIVE_DIR="$tmpdir/archive"
+  export REDCAP_UPGRADE_OLD_VERSION_DELETE_WITHOUT_PROMPT=true
+
+  source /dev/stdin <<'\''FUNCS'\''
+'"$(extract_function check_old_version_dirs)"'
+FUNCS
+
+  check_old_version_dirs >"$tmpdir/out"
+  grep -F "Keeping newest 1 old version directories; moving 2 older directories." "$tmpdir/out" >/dev/null
+  grep -F "Archive directory: $tmpdir/archive" "$tmpdir/out" >/dev/null
+  test ! -e "$tmpdir/redcap/redcap_v1.0.0"
+  test ! -e "$tmpdir/redcap/redcap_v1.1.0"
+  test -d "$tmpdir/archive/redcap_v1.0.0"
+  test -d "$tmpdir/archive/redcap_v1.1.0"
+  test -d "$tmpdir/redcap/redcap_v2.0.0"
+  test -d "$tmpdir/redcap/redcap_v3.0.0"
+'
+
+run_bash_test "check_old_version_dirs prompt keeps old versions when declined" '
+  set -euo pipefail
+  tmpdir="$(mktemp -d)"
+  trap '\''rm -rf "$tmpdir"'\'' EXIT
+
+  mkdir -p "$tmpdir/redcap/redcap_v1.0.0" "$tmpdir/redcap/redcap_v1.1.0" "$tmpdir/redcap/redcap_v2.0.0"
+
+  export REDCAP_ROOT="$tmpdir/redcap"
+  export TARGET_VERSION="2.0.0"
+  export REDCAP_UPGRADE_OLD_VERSION_KEEP="0"
+  export REDCAP_UPGRADE_OLD_VERSION_ARCHIVE_DIR=""
+  export REDCAP_UPGRADE_OLD_VERSION_DELETE_WITHOUT_PROMPT=false
+
+  source /dev/stdin <<'\''FUNCS'\''
+'"$(extract_function check_old_version_dirs)"'
+FUNCS
+
+  printf "n\n" | check_old_version_dirs >"$tmpdir/out"
+  grep -F "Kept old REDCap version directories." "$tmpdir/out" >/dev/null
+  test -d "$tmpdir/redcap/redcap_v1.0.0"
+  test -d "$tmpdir/redcap/redcap_v1.1.0"
+  test -d "$tmpdir/redcap/redcap_v2.0.0"
+'
+
 run_bash_test "confirm_privileged_run warns non-root non-sudo users and allows confirmation" '
   set -euo pipefail
   TMPDIR="$(mktemp -d)"

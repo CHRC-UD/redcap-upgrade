@@ -108,6 +108,29 @@ REDCAP_UPGRADE_REMOVE_INSTALL_PHP="true"
 
 
 # -----------------------------------------------------------------------------
+# Old REDCap version directory retention
+# Stale redcap_v* directories can leave old REDCap code web-accessible after an
+# upgrade. Set REDCAP_UPGRADE_OLD_VERSION_KEEP to the number of previous version
+# directories to retain. This setting is required: if blank, the script warns
+# and stops before post-upgrade custom scripts run.
+#
+# Examples:
+#   REDCAP_UPGRADE_OLD_VERSION_KEEP="1"  # keep only the newest previous version
+#   REDCAP_UPGRADE_OLD_VERSION_KEEP="0"  # delete every old version directory
+#
+# Set REDCAP_UPGRADE_OLD_VERSION_ARCHIVE_DIR to move excess old version
+# directories there instead of deleting them. Use a directory outside REDCAP_ROOT
+# so archived versions are not web-accessible.
+#
+# Set REDCAP_UPGRADE_OLD_VERSION_DELETE_WITHOUT_PROMPT=true to perform the
+# configured retention action without asking after a successful upgrade.
+# -----------------------------------------------------------------------------
+REDCAP_UPGRADE_OLD_VERSION_KEEP=""
+REDCAP_UPGRADE_OLD_VERSION_ARCHIVE_DIR=""
+REDCAP_UPGRADE_OLD_VERSION_DELETE_WITHOUT_PROMPT="false"
+
+
+# -----------------------------------------------------------------------------
 # SELinux writable REDCap paths
 # Set REDCAP_UPGRADE_MANAGE_SELINUX=false to skip all SELinux labeling and
 # SELinux validation. The default is true because SELinux mislabels can cause

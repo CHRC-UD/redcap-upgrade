@@ -73,7 +73,7 @@ The script will:
 6. Generate and execute the same upgrade SQL that `upgrade.php` would run.
 7. Validate the new `ControlCenter/index.php` path, SELinux labels, absence of `user_tmp_t`, and HTTP reachability.
 8. Remove or prompt to remove detected `install.php` files under the REDCap webroot.
-9. Prompt to delete old `redcap_v*` directories flagged by `check.php`.
+9. Apply the configured old-version retention policy for `redcap_v*` directories.
 
 A timestamped log of the full run is written to `logs/upgrade_YYYYMMDD_HHMMSS.log`.
 
@@ -153,6 +153,32 @@ REDCAP_UPGRADE_REMOVE_INSTALL_PHP="false"   # skip cleanup
 ```
 
 When the setting is absent from an existing local config, the script defaults to `prompt`.
+
+Old REDCap version directories can leave stale REDCap code web-accessible after an
+upgrade. Configure `REDCAP_UPGRADE_OLD_VERSION_KEEP` in the local `.conf` to enable
+retention. If it is blank or omitted, the script warns and stops before running the
+post-upgrade custom script, leaving existing version directories untouched:
+
+```bash
+REDCAP_UPGRADE_OLD_VERSION_KEEP="1"      # keep only the newest previous version
+REDCAP_UPGRADE_OLD_VERSION_KEEP="0"      # delete every old version directory
+```
+
+To move old versions out of the webroot instead of deleting them, set an archive
+directory:
+
+```bash
+REDCAP_UPGRADE_OLD_VERSION_ARCHIVE_DIR="/var/backups/redcap/old_versions"
+```
+
+Use a directory outside `REDCAP_ROOT`; otherwise archived versions may still be
+web-accessible.
+
+Set this to perform the configured retention action without an interactive prompt:
+
+```bash
+REDCAP_UPGRADE_OLD_VERSION_DELETE_WITHOUT_PROMPT="true"
+```
 
 Example validation output:
 

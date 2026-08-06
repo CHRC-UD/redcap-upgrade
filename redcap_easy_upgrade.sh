@@ -94,6 +94,9 @@ fi
 [[ -z "${REDCAP_UPGRADE_HTTP_SMOKE_CHECK:-}" ]] && REDCAP_UPGRADE_HTTP_SMOKE_CHECK="true"
 [[ -z "${REDCAP_UPGRADE_HTTP_BASE_URL:-}"   ]] && REDCAP_UPGRADE_HTTP_BASE_URL=""
 [[ -z "${REDCAP_UPGRADE_REMOVE_INSTALL_PHP:-}" ]] && REDCAP_UPGRADE_REMOVE_INSTALL_PHP="prompt"
+[[ -z "${REDCAP_UPGRADE_OLD_VERSION_KEEP:-}" ]] && REDCAP_UPGRADE_OLD_VERSION_KEEP=""
+[[ -z "${REDCAP_UPGRADE_OLD_VERSION_ARCHIVE_DIR:-}" ]] && REDCAP_UPGRADE_OLD_VERSION_ARCHIVE_DIR=""
+[[ -z "${REDCAP_UPGRADE_OLD_VERSION_DELETE_WITHOUT_PROMPT:-}" ]] && REDCAP_UPGRADE_OLD_VERSION_DELETE_WITHOUT_PROMPT="false"
 [[ -z "${REDCAP_UPGRADE_POST_SCRIPT:-}"     ]] && REDCAP_UPGRADE_POST_SCRIPT=""
 # All other vars (credentials, MySQL, SSL, proxy) default to empty — prompts or
 # auto-detection handle them later in the script.
@@ -1241,119 +1244,145 @@ check_webserver_permissions() {
 
 check_webserver_permissions
 
-# ── Post-upgrade: offer to delete old redcap_v* directories ───────────────────
-# Reads the deletion conditions directly from the newly installed check.php so
-# the logic is always correct regardless of which version was just installed.
-#
-# check.php flags versions by comparing a decimal representation of each
-# installed redcap_v* directory name against a set of if/elseif conditions.
-# Rather than hardcoding those thresholds here (they change every release), we:
-#   1. Parse check.php with PHP to extract the exact condition expressions
-#   2. Apply those conditions to every installed redcap_v* directory
-#   3. Prompt the user to confirm deletion of each flagged directory
+# ── Post-upgrade: optionally move/delete old redcap_v* directories ────────────
+# REDCap has historically warned about stale redcap_v* trees because old code can
+# remain web-reachable after the live installation is upgraded. Keep cleanup
+# opt-in for conservative sites, but make it configurable for unattended runs.
 check_old_version_dirs() {
-  local check_php="$REDCAP_ROOT/redcap_v$TARGET_VERSION/ControlCenter/check.php"
+  local keep="${REDCAP_UPGRADE_OLD_VERSION_KEEP:-}"
+  local archive_dir="${REDCAP_UPGRADE_OLD_VERSION_ARCHIVE_DIR:-}"
+  local action="delete"
+  local keep_count total action_count ver dir dest confirm completed=0 stamp
+  local -a old_versions=() action_versions=()
 
-  if [[ ! -f "$check_php" ]]; then
-    echo "  (Skipping old-version cleanup: check.php not found at $check_php)"
+  if [[ -z "$keep" ]]; then
+    echo "" >&2
+    echo "WARNING: Old REDCap version retention is not configured." >&2
+    echo "         Stale redcap_v* directories can leave old REDCap code web-accessible." >&2
+    echo "         Configure REDCAP_UPGRADE_OLD_VERSION_KEEP in redcap_easy_upgrade.conf" >&2
+    echo "         to enable this feature (for example: REDCAP_UPGRADE_OLD_VERSION_KEEP=1)." >&2
+    return 1
+  fi
+
+  if [[ ! "$keep" =~ ^[0-9]+$ ]]; then
+    echo ""
+    echo "WARNING: Invalid REDCAP_UPGRADE_OLD_VERSION_KEEP='$keep'; old-version cleanup disabled." >&2
     return 0
   fi
 
-  if ! command -v php >/dev/null 2>/dev/null; then
-    echo "  (Skipping old-version cleanup: php CLI not available)"
-    return 0
+  if [[ -n "$archive_dir" ]]; then
+    action="move"
+    if [[ "$archive_dir" != /* ]]; then
+      echo ""
+      echo "WARNING: REDCAP_UPGRADE_OLD_VERSION_ARCHIVE_DIR must be an absolute path; old-version cleanup disabled." >&2
+      return 0
+    fi
+    if [[ "${archive_dir%/}" == "${REDCAP_ROOT%/}" ]]; then
+      echo ""
+      echo "WARNING: REDCAP_UPGRADE_OLD_VERSION_ARCHIVE_DIR must not be REDCAP_ROOT; old-version cleanup disabled." >&2
+      return 0
+    fi
   fi
 
-  # PHP reads check.php, extracts the if/elseif conditions that push to
-  # $deleteRedcapDirs, and applies them to each installed redcap_v* directory.
-  # Outputs one version number per line for each directory that should be deleted.
-  mapfile -t flagged < <(
-    PHPRC_ROOT="$REDCAP_ROOT" PHPRC_TARGET="$TARGET_VERSION" \
-    php -d display_errors=0 2>/dev/null <<'PHPEOF'
-<?php
-$root   = getenv('PHPRC_ROOT');
-$target = getenv('PHPRC_TARGET');
-$check  = $root . '/redcap_v' . $target . '/ControlCenter/check.php';
-
-if (!is_readable($check)) exit;
-
-// Mirrors Upgrade::getDecVersion(): "15.5.35" -> 150535
-function decVer(string $v): int {
-    [$one, $two, $three] = explode('.', $v) + [0, 0, 0];
-    return (int)($one . sprintf('%02d', (int)$two) . sprintf('%02d', (int)$three));
-}
-
-// Extract conditions from check.php that add entries to $deleteRedcapDirs.
-// Each condition is on a single if/elseif line immediately before a line
-// that contains "$deleteRedcapDirs[" — scan for that pattern.
-$lines      = file($check, FILE_IGNORE_NEW_LINES);
-$conditions = [];
-$n          = count($lines);
-for ($i = 0; $i < $n; $i++) {
-    $trimmed = trim($lines[$i]);
-    // Match:  if (EXPR) {   or   } elseif (EXPR) {
-    if (!preg_match('/^(?:(?:\}\s*)?elseif|if)\s*\((.+)\)\s*\{?\s*$/', $trimmed, $m)) continue;
-    // Peek at the next non-empty line — it must add to $deleteRedcapDirs
-    for ($j = $i + 1; $j < $n && trim($lines[$j]) === ''; $j++);
-    if (isset($lines[$j]) && strpos($lines[$j], '$deleteRedcapDirs[') !== false) {
-        $raw = trim($m[1]);
-        // Sanity check: only allow safe tokens before eval-ing
-        if (preg_match('/^[\s\$versionDec0-9<>&|!()\*]+$/', $raw)) {
-            $conditions[] = $raw;
-        }
-    }
-}
-
-if (empty($conditions)) exit;
-
-$target_dec = decVer($target);
-$dirs       = glob($root . '/redcap_v*', GLOB_ONLYDIR) ?: [];
-
-foreach ($dirs as $dir) {
-    $ver = substr(basename($dir), strlen('redcap_v'));
-    if (!preg_match('/^\d+\.\d+\.\d+$/', $ver)) continue;
-    $versionDec = decVer($ver);          // matches the variable name in check.php
-    if ($versionDec === $target_dec) continue;  // never flag the version we just installed
-
-    // Apply extracted conditions, preserving the if/elseif chain:
-    // once a condition matches, skip the rest (matches check.php semantics)
-    foreach ($conditions as $cond) {
-        $expr = str_replace('$versionDec', (string)$versionDec, $cond);
-        if (eval("return (bool)($expr);")) {
-            echo $ver . "\n";
-            break;
-        }
-    }
-}
-PHPEOF
+  mapfile -t old_versions < <(
+    find "$REDCAP_ROOT" -maxdepth 1 -type d -name 'redcap_v*' -printf '%f\n' 2>/dev/null |
+      sed -n 's/^redcap_v//p' |
+      awk '/^[0-9]+\.[0-9]+\.[0-9]+$/' |
+      awk -v target="$TARGET_VERSION" '$0 != target' |
+      sort -V
   )
 
-  if [[ ${#flagged[@]} -eq 0 ]]; then
-    echo "  No old version directories flagged for deletion by check.php."
+  total="${#old_versions[@]}"
+  keep_count=$((10#$keep))
+
+  if (( total == 0 )); then
+    echo "  No old REDCap version directories found."
     return 0
   fi
 
-  # Sort oldest first
-  mapfile -t flagged < <(printf '%s\n' "${flagged[@]}" | sort -V)
+  if (( total <= keep_count )); then
+    echo "  Found $total old REDCap version directories; keeping all because REDCAP_UPGRADE_OLD_VERSION_KEEP=$keep_count."
+    return 0
+  fi
+
+  action_count=$((total - keep_count))
+  mapfile -t action_versions < <(printf '%s\n' "${old_versions[@]}" | head -n "$action_count")
 
   echo ""
   echo "─────────────────────────────────────────────────────────────────────────────"
-  echo "  Old REDCap version directories flagged for deletion"
-  echo "  (conditions read from redcap_v${TARGET_VERSION}/ControlCenter/check.php)"
+  echo "  Old REDCap version retention"
+  if [[ "$action" == "move" ]]; then
+    echo "  Keeping newest $keep_count old version directories; moving $action_count older directories."
+    echo "  Archive directory: $archive_dir"
+  else
+    echo "  Keeping newest $keep_count old version directories; deleting $action_count older directories."
+  fi
   echo "─────────────────────────────────────────────────────────────────────────────"
   echo ""
-
-  for ver in "${flagged[@]}"; do
-    local dir="$REDCAP_ROOT/redcap_v$ver"
-    read -r -p "  Delete $dir ? [y/N]: " confirm
-    if [[ "$confirm" =~ ^[Yy]$ ]]; then
-      rm -rf "$dir"
-      echo "  Deleted: $dir"
+  if [[ "$action" == "move" && "${archive_dir%/}/" == "${REDCAP_ROOT%/}/"* ]]; then
+    echo "WARNING: Archive directory is inside REDCAP_ROOT and may still be web-accessible."
+    echo "         For security, choose an archive directory outside the REDCap webroot."
+    echo ""
+  fi
+  echo "  Old versions found:"
+  for ver in "${old_versions[@]}"; do
+    if printf '%s\n' "${action_versions[@]}" | grep -Fxq "$ver"; then
+      echo "    $action: $REDCAP_ROOT/redcap_v$ver"
     else
-      echo "  Kept:    $dir"
+      echo "    keep:   $REDCAP_ROOT/redcap_v$ver"
+    fi
+  done
+  echo ""
+
+  if [[ ! "${REDCAP_UPGRADE_OLD_VERSION_DELETE_WITHOUT_PROMPT,,}" =~ ^(1|true|yes|on|auto|always)$ ]]; then
+    if [[ "$action" == "move" ]]; then
+      read -r -p "  Move the $action_count old REDCap version directories listed above? [y/N]: " confirm
+    else
+      read -r -p "  Delete the $action_count old REDCap version directories listed above? [y/N]: " confirm
     fi
     echo ""
+    if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+      echo "  Kept old REDCap version directories."
+      return 0
+    fi
+  fi
+
+  if [[ "$action" == "move" ]]; then
+    mkdir -p "$archive_dir" || {
+      echo "WARNING: Could not create archive directory: $archive_dir" >&2
+      return 0
+    }
+  fi
+
+  for ver in "${action_versions[@]}"; do
+    dir="$REDCAP_ROOT/redcap_v$ver"
+    if [[ "$action" == "move" ]]; then
+      dest="${archive_dir%/}/redcap_v$ver"
+      if [[ -e "$dest" ]]; then
+        stamp="$(date +%Y%m%d_%H%M%S)"
+        dest="${dest}.archived.${stamp}"
+      fi
+      if mv "$dir" "$dest"; then
+        completed=$((completed + 1))
+        echo "  Moved: $dir -> $dest"
+      else
+        echo "WARNING: Could not move $dir to $dest" >&2
+      fi
+    else
+      if rm -rf "$dir"; then
+        completed=$((completed + 1))
+        echo "  Deleted: $dir"
+      else
+        echo "WARNING: Could not delete $dir" >&2
+      fi
+    fi
   done
+
+  if [[ "$action" == "move" ]]; then
+    echo "  Moved $completed old REDCap version directories."
+  else
+    echo "  Removed $completed old REDCap version directories."
+  fi
 }
 
 check_old_version_dirs
