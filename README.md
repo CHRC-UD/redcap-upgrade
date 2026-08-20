@@ -11,6 +11,7 @@ instead of the web server account.
 | File | Purpose |
 |---|---|
 | `redcap_easy_upgrade.sh` | Main upgrade script (bash) |
+| `redcap_modules_permissions.sh` | Temporarily opens up `modules/` for web-based module installs (bash) |
 | `redcap_easy_upgrade.conf.example` | Configuration template — copy to `.conf` and edit |
 | `redcap_easy_upgrade.conf` | Your site config (not committed — may contain credentials) |
 | `logs/` | Per-run log files (not committed) |
@@ -109,6 +110,30 @@ sudo REDCAP_COMMUNITY_USER=me REDCAP_COMMUNITY_PASSWORD=s3cr3t \
 ```
 
 Environment variables always take precedence over values in `redcap_easy_upgrade.conf`.
+
+---
+
+### Installing/updating External Modules via the web interface
+
+REDCap's Control Center module installer needs the web server user to have write access
+to `modules/`, which is normally locked down to root (see "Important safety notes" below).
+`redcap_modules_permissions.sh` opens that window for you and closes it again automatically:
+
+```bash
+sudo ./redcap_modules_permissions.sh
+```
+
+It will:
+
+1. Record the current owner/group (and SELinux type, if SELinux is active) of
+   `$REDCAP_ROOT/modules`.
+2. `chown` the directory to the web server user and relabel it `httpd_sys_rw_content_t`.
+3. Wait for you to press Enter after installing/updating modules via the web UI.
+4. Restore the original owner/group and SELinux label.
+
+Permissions are also restored automatically if you press Ctrl-C while it's waiting. It reads
+`REDCAP_ROOT`, `REDCAP_UPGRADE_FORBIDDEN_USERS`, and `REDCAP_UPGRADE_MANAGE_SELINUX` from
+`redcap_easy_upgrade.conf`, the same config file used by the upgrade script.
 
 ---
 
