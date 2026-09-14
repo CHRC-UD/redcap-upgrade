@@ -181,8 +181,8 @@ When the setting is absent from an existing local config, the script defaults to
 
 Old REDCap version directories can leave stale REDCap code web-accessible after an
 upgrade. Configure `REDCAP_UPGRADE_OLD_VERSION_KEEP` in the local `.conf` to enable
-retention. If it is blank or omitted, the script warns and stops before running the
-post-upgrade custom script, leaving existing version directories untouched:
+retention. If it is blank or omitted, the script warns, leaves existing version
+directories untouched, and continues to the post-upgrade custom script:
 
 ```bash
 REDCAP_UPGRADE_OLD_VERSION_KEEP="1"      # keep only the newest previous version

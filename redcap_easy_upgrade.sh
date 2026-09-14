@@ -1261,7 +1261,9 @@ check_old_version_dirs() {
     echo "         Stale redcap_v* directories can leave old REDCap code web-accessible." >&2
     echo "         Configure REDCAP_UPGRADE_OLD_VERSION_KEEP in redcap_easy_upgrade.conf" >&2
     echo "         to enable this feature (for example: REDCAP_UPGRADE_OLD_VERSION_KEEP=1)." >&2
-    return 1
+    # Retention is optional.  Do not let this advisory warning trigger `set -e`
+    # and prevent the configured post-upgrade script from running.
+    return 0
   fi
 
   if [[ ! "$keep" =~ ^[0-9]+$ ]]; then

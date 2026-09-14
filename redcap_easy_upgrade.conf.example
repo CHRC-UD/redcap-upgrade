@@ -111,8 +111,8 @@ REDCAP_UPGRADE_REMOVE_INSTALL_PHP="true"
 # Old REDCap version directory retention
 # Stale redcap_v* directories can leave old REDCap code web-accessible after an
 # upgrade. Set REDCAP_UPGRADE_OLD_VERSION_KEEP to the number of previous version
-# directories to retain. This setting is required: if blank, the script warns
-# and stops before post-upgrade custom scripts run.
+# directories to retain. This setting is optional: if blank, the script warns,
+# leaves existing version directories untouched, and continues.
 #
 # Examples:
 #   REDCAP_UPGRADE_OLD_VERSION_KEEP="1"  # keep only the newest previous version
