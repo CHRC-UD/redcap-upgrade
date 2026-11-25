@@ -14,7 +14,9 @@ extract_function() {
 
 run_bash_test() {
   local name="$1" code="$2"
-  if bash -c "$code"; then
+  if bash -c "_AIDE_HOOK_AVAILABLE=false
+$(extract_function run_filesystem_command)
+$code"; then
     printf 'PASS: %s\n' "$name"
   else
     printf 'FAIL: %s\n' "$name" >&2
@@ -258,7 +260,7 @@ FUNCS
   test -e "$tmpdir/redcap/redcap_v1.2.3/install.php"
 '
 
-run_bash_test "check_old_version_dirs warns and stops when retention is blank" '
+run_bash_test "check_old_version_dirs warns and returns success when retention is blank" '
   set -euo pipefail
   tmpdir="$(mktemp -d)"
   trap '\''rm -rf "$tmpdir"'\'' EXIT
@@ -275,9 +277,7 @@ run_bash_test "check_old_version_dirs warns and stops when retention is blank" '
 '"$(extract_function check_old_version_dirs)"'
 FUNCS
 
-  if check_old_version_dirs >"$tmpdir/out" 2>"$tmpdir/err"; then
-    exit 1
-  fi
+  check_old_version_dirs >"$tmpdir/out" 2>"$tmpdir/err"
   grep -F "WARNING: Old REDCap version retention is not configured." "$tmpdir/err" >/dev/null
   grep -F "Configure REDCAP_UPGRADE_OLD_VERSION_KEEP in redcap_easy_upgrade.conf" "$tmpdir/err" >/dev/null
   test -d "$tmpdir/redcap/redcap_v1.0.0"

@@ -198,8 +198,34 @@ fi
 
 # ── Temp file cleanup ──────────────────────────────────────────────────────────
 _TMPFILES=()
-_cleanup() { rm -rf "${_TMPFILES[@]}" 2>/dev/null || true; }
+_AIDE_HOOK_AVAILABLE=false
+if [[ -r "${_SCRIPT_DIR}/aide_upgrade_hooks.sh" ]]; then
+  # Optional observation only. It never approves or suppresses file changes.
+  source "${_SCRIPT_DIR}/aide_upgrade_hooks.sh"
+  _AIDE_HOOK_AVAILABLE=true
+elif [[ ${REDCAP_UPGRADE_AIDE_TRACKING:-false} == true ]]; then
+  echo "WARNING: AIDE upgrade tracking hooks are unavailable; changes remain unclassified." >&2
+fi
+_cleanup() {
+  local exit_status=$?
+  # Keep cleanup inside the declared window without making observation a
+  # dependency of the upgrade or changing legacy best-effort cleanup behavior.
+  if (( ${#_TMPFILES[@]} )); then
+    if $_AIDE_HOOK_AVAILABLE; then
+      aide_upgrade_filesystem rm -rf -- "${_TMPFILES[@]}" 2>/dev/null || true
+    else
+      rm -rf -- "${_TMPFILES[@]}" 2>/dev/null || true
+    fi
+  fi
+  if $_AIDE_HOOK_AVAILABLE; then
+    if ! aide_upgrade_finish "$exit_status"; then
+      echo 'WARNING: Could not record the upgrade-window finish.' >&2
+    fi
+  fi
+  return "$exit_status"
+}
 trap _cleanup EXIT
+if $_AIDE_HOOK_AVAILABLE; then aide_upgrade_bootstrap; fi
 
 # ── Logging setup ──────────────────────────────────────────────────────────────
 # Tee all stdout + stderr to a timestamped log file in $UPGRADE_LOG_DIR.
@@ -216,6 +242,15 @@ if [[ -d "$UPGRADE_LOG_DIR" ]]; then
   echo "└─────────────────────────────────────────────────────────────────────────────"
   echo ""
 fi
+
+run_filesystem_command() {
+  if $_AIDE_HOOK_AVAILABLE; then aide_upgrade_filesystem "$@"; else "$@"; fi
+}
+
+# Observation does not change legacy best-effort permission repair behavior.
+run_optional_filesystem_command() {
+  "$@" 2>/dev/null || true
+}
 
 run_with_progress() {
   local description="$1"
@@ -240,9 +275,10 @@ run_with_progress() {
     elapsed=$((now - start))
     echo "  Completed: $description (${elapsed}s elapsed)"
     return 0
+  else
+    local status="$?"
   fi
 
-  local status="$?"
   echo "  FAILED: $description" >&2
   return "$status"
 }
@@ -521,23 +557,23 @@ install_version_tree() {
 
   if command -v rsync >/dev/null 2>&1; then
     echo "  Using: rsync -aAX"
-    rsync -aAX "$src_dir"/ "$staging"/
+    run_filesystem_command rsync -aAX "$src_dir"/ "$staging"/
   else
     echo "  rsync not found; using: cp -a"
-    cp -a "$src_dir"/. "$staging"/
+    run_filesystem_command cp -a "$src_dir"/. "$staging"/
   fi
 
   if [[ -d "$dst_dir" ]]; then
     backup_dir="${dst_dir}.pre-upgrade.${stamp}"
     echo "Preserving existing version directory as rollback copy: $backup_dir"
-    mv "$dst_dir" "$backup_dir"
+    run_filesystem_command mv "$dst_dir" "$backup_dir"
   fi
 
-  if ! mv "$staging" "$dst_dir"; then
+  if ! run_filesystem_command mv "$staging" "$dst_dir"; then
     echo "ERROR: Failed to move staged install into place: $dst_dir" >&2
     if [[ -n "$backup_dir" && -d "$backup_dir" && ! -e "$dst_dir" ]]; then
       echo "Restoring previous directory from rollback copy: $backup_dir" >&2
-      mv "$backup_dir" "$dst_dir"
+      run_filesystem_command mv "$backup_dir" "$dst_dir"
     fi
     return 1
   fi
@@ -552,7 +588,7 @@ sync_version_owner_group() {
   local owner_group
   owner_group="$(reference_version_owner_group)"
   echo "Matching owner/group to existing REDCap version directories: $owner_group"
-  run_with_progress "chown -R $owner_group $version_dir" chown -R "$owner_group" "$version_dir"
+  run_with_progress "chown -R $owner_group $version_dir" run_filesystem_command chown -R "$owner_group" "$version_dir"
 }
 
 selinux_mode() {
@@ -638,20 +674,20 @@ apply_selinux_labels() {
     done < <(existing_writable_paths)
 
     echo "  Relabeling: $version_dir"
-    run_with_progress "restorecon -RF $version_dir" restorecon -RF "$version_dir"
+    run_with_progress "restorecon -RF $version_dir" run_filesystem_command restorecon -RF "$version_dir"
     while IFS= read -r writable_path; do
       echo "  Relabeling writable path: $writable_path"
-      run_with_progress "restorecon -RF $writable_path" restorecon -RF "$writable_path"
+      run_with_progress "restorecon -RF $writable_path" run_filesystem_command restorecon -RF "$writable_path"
     done < <(existing_writable_paths)
   elif command -v chcon >/dev/null 2>&1; then
     echo "  WARNING: semanage/restorecon unavailable; using chcon fallback."
     echo "  WARNING: chcon labels are not persistent across a filesystem relabel."
-    run_with_progress "chcon -R -t httpd_sys_content_t $version_dir" chcon -R -t httpd_sys_content_t "$version_dir"
+    run_with_progress "chcon -R -t httpd_sys_content_t $version_dir" run_filesystem_command chcon -R -t httpd_sys_content_t "$version_dir"
 
     local writable_path
     while IFS= read -r writable_path; do
       echo "  Applying writable label: $writable_path -> httpd_sys_rw_content_t"
-      run_with_progress "chcon -R -t httpd_sys_rw_content_t $writable_path" chcon -R -t httpd_sys_rw_content_t "$writable_path"
+      run_with_progress "chcon -R -t httpd_sys_rw_content_t $writable_path" run_filesystem_command chcon -R -t httpd_sys_rw_content_t "$writable_path"
     done < <(existing_writable_paths)
   else
     echo "ERROR: SELinux is active, but semanage/restorecon or chcon is not available." >&2
@@ -872,7 +908,7 @@ remove_install_php_files() {
 
   local removed=0
   for installer in "${installers[@]}"; do
-    if rm -f "$installer"; then
+    if run_filesystem_command rm -f -- "$installer"; then
       removed=$((removed + 1))
     else
       echo "WARNING: Could not remove $installer" >&2
@@ -1009,6 +1045,12 @@ PY
   fi
 fi
 
+# The existing dry-run may still prepare version files; leave those changes
+# unclassified so normal filesystem monitoring can report them.
+if $_AIDE_HOOK_AVAILABLE; then
+  aide_upgrade_begin "$TARGET_VERSION" "$DRY_RUN"
+fi
+
 # ── Step 4: Download and extract version zip ───────────────────────────────────
 NEED_DOWNLOAD=false
 if [[ -n "$LOCAL_ZIP" || ! -d "$VERSION_DIR" ]]; then
@@ -1112,7 +1154,7 @@ if $NEED_DOWNLOAD; then
   _TMPFILES+=("$TMP_EXTRACT")
 
   echo "Extracting zip..."
-  if ! unzip -q "$ZIP_FILE" -d "$TMP_EXTRACT"; then
+  if ! run_filesystem_command unzip -q "$ZIP_FILE" -d "$TMP_EXTRACT"; then
     echo "ERROR: Failed to extract the upgrade ZIP." >&2
     print_manual_download_instructions
     exit 1
@@ -1294,17 +1336,17 @@ check_webserver_permissions() {
     echo "Fixing permissions... (this may take a moment)"
 
     echo "  [$(date +%H:%M:%S)] 1/4: Resetting ownership of all files to root:root..."
-    chown -R root:root "$REDCAP_ROOT" 2>/dev/null || true
+    run_optional_filesystem_command chown -R root:root "$REDCAP_ROOT"
 
     echo "  [$(date +%H:%M:%S)] 2/4: Setting directory (755) and file (644) modes..."
-    chmod -R u+rwX,go+rX,go-w "$REDCAP_ROOT" 2>/dev/null || true
+    run_optional_filesystem_command chmod -R u+rwX,go+rX,go-w "$REDCAP_ROOT"
 
     # Restore temp/ so the web server can write to it
     if [[ -d "$REDCAP_ROOT/temp" ]]; then
       echo "  [$(date +%H:%M:%S)] 3/4: Restoring web server ownership for temp/ directory..."
-      chown -R "$web_user:$web_user" "$REDCAP_ROOT/temp" 2>/dev/null || true
+      run_optional_filesystem_command chown -R "$web_user:$web_user" "$REDCAP_ROOT/temp"
       echo "  [$(date +%H:%M:%S)] 4/4: Setting web server write permissions for temp/ directory..."
-      chmod -R u+rwX,go-rwx "$REDCAP_ROOT/temp" 2>/dev/null || true
+      run_optional_filesystem_command chmod -R u+rwX,go-rwx "$REDCAP_ROOT/temp"
       echo "  [$(date +%H:%M:%S)] Done."
       echo ""
       echo "  $REDCAP_ROOT         → root:root, dirs=755, files=644"
@@ -1340,8 +1382,7 @@ check_old_version_dirs() {
     echo "         Stale redcap_v* directories can leave old REDCap code web-accessible." >&2
     echo "         Configure REDCAP_UPGRADE_OLD_VERSION_KEEP in redcap_easy_upgrade.conf" >&2
     echo "         to enable this feature (for example: REDCAP_UPGRADE_OLD_VERSION_KEEP=1)." >&2
-    # Retention is optional.  Do not let this advisory warning trigger `set -e`
-    # and prevent the configured post-upgrade script from running.
+    # Retention is optional; continue to the configured post-upgrade script.
     return 0
   fi
 
@@ -1443,14 +1484,14 @@ check_old_version_dirs() {
         stamp="$(date +%Y%m%d_%H%M%S)"
         dest="${dest}.archived.${stamp}"
       fi
-      if mv "$dir" "$dest"; then
+      if run_filesystem_command mv "$dir" "$dest"; then
         completed=$((completed + 1))
         echo "  Moved: $dir -> $dest"
       else
         echo "WARNING: Could not move $dir to $dest" >&2
       fi
     else
-      if rm -rf "$dir"; then
+      if run_filesystem_command rm -rf "$dir"; then
         completed=$((completed + 1))
         echo "  Deleted: $dir"
       else
@@ -1487,3 +1528,6 @@ if [[ -n "$REDCAP_UPGRADE_POST_SCRIPT" ]]; then
   fi
   echo ""
 fi
+
+# Record script completion only; this does not authorize filesystem changes.
+if $_AIDE_HOOK_AVAILABLE; then AIDE_UPGRADE_COMPLETE=true; fi
