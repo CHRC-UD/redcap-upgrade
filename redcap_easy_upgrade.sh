@@ -31,6 +31,7 @@
 # Options:
 #   --check-versions   List versions newer than your current install, then exit.
 #   --skip-download    Skip download/extract; use an already-present redcap_v* directory.
+#   --zip PATH         Use a manually downloaded VUMC upgrade ZIP. Requires VERSION.
 #   --dry-run          Generate the upgrade SQL and print it, but do not execute it.
 #   -h, --help         Show this help text.
 #
@@ -113,13 +114,24 @@ FORBIDDEN_USERS="${REDCAP_UPGRADE_FORBIDDEN_USERS:-apache www-data wwwrun nginx}
 DRY_RUN=false
 CHECK_VERSIONS=false
 SKIP_DOWNLOAD=false
+LOCAL_ZIP=""
 TARGET_VERSION=""
 
 # ── Parse arguments ────────────────────────────────────────────────────────────
-for arg in "$@"; do
+while [[ $# -gt 0 ]]; do
+  arg="$1"
+  shift
   case "$arg" in
     --check-versions) CHECK_VERSIONS=true ;;
     --skip-download)  SKIP_DOWNLOAD=true ;;
+    --zip)
+      if [[ -z "${1:-}" || "$1" == -* ]]; then
+        echo "ERROR: --zip requires a path to the upgrade ZIP." >&2
+        exit 1
+      fi
+      LOCAL_ZIP="$1"
+      shift
+      ;;
     --dry-run)        DRY_RUN=true ;;
     -h|--help)
       sed -n '/^# Usage:/,/^[^#]/{ /^#/{ s/^# \{0,1\}//; p } }' "$0"
@@ -136,6 +148,18 @@ for arg in "$@"; do
       ;;
   esac
 done
+
+if [[ -n "$LOCAL_ZIP" ]]; then
+  if [[ -z "$TARGET_VERSION" ]] || $SKIP_DOWNLOAD || $CHECK_VERSIONS; then
+    echo "ERROR: Use --zip PATH with an explicit VERSION and without --skip-download or --check-versions." >&2
+    exit 1
+  fi
+  if [[ ! -f "$LOCAL_ZIP" || ! -r "$LOCAL_ZIP" || ! -s "$LOCAL_ZIP" ]]; then
+    echo "ERROR: Cannot read a nonempty upgrade ZIP at $LOCAL_ZIP." >&2
+    exit 1
+  fi
+  [[ "$LOCAL_ZIP" == /* ]] || LOCAL_ZIP="$PWD/$LOCAL_ZIP"
+fi
 
 confirm_privileged_run() {
   local run_user="$1" run_uid="$2"
@@ -438,7 +462,31 @@ download_version_zip() {
     --data-urlencode "password=$comm_pass" \
     --data-urlencode "version=$version" \
     -o "$zip_file" \
+    --write-out '%{http_code}' \
     "$VERSIONS_URL"
+}
+
+validate_downloaded_zip() {
+  local zip_file="$1" http_status="$2"
+  local signature
+  signature="$(od -An -N4 -tx1 "$zip_file" | tr -d '[:space:]')"
+  if [[ "$signature" == "504b0304" ]]; then
+    return 0
+  fi
+
+  echo "ERROR: VUMC returned a non-ZIP response (HTTP $http_status, $(wc -c < "$zip_file") bytes)." >&2
+  if cmp -s "$zip_file" <(printf '%s' 'test2'); then
+    echo "  The response was the literal text 'test2'." >&2
+  fi
+  return 1
+}
+
+print_manual_download_instructions() {
+  printf '\nManual download for REDCap %s\n' "$TARGET_VERSION" >&2
+  echo "  1. Sign in to REDCap Community at https://redcap.vumc.org/." >&2
+  echo "  2. In AnswerHub, find the release and download its Upgrade ZIP." >&2
+  echo "  3. Copy the ZIP to this server, keep it zipped, and rerun:" >&2
+  printf '     sudo %q --zip /path/to/upgrade.zip %s\n' "${_SCRIPT_DIR}/redcap_easy_upgrade.sh" "$TARGET_VERSION" >&2
 }
 
 # ── Install and filesystem helpers ───────────────────────────────────────────
@@ -845,9 +893,15 @@ VERSIONS_JSON="$(mktemp)"
 _TMPFILES+=("$VERSIONS_JSON")
 
 if ! fetch_versions_json "$CURRENT_VERSION" > "$VERSIONS_JSON" 2>/dev/null || [[ ! -s "$VERSIONS_JSON" ]]; then
-  echo "ERROR: Could not fetch versions from $VERSIONS_URL" >&2
-  echo "  Check network connectivity or try --skip-download with a specific TARGET_VERSION." >&2
-  exit 1
+  if [[ -z "$LOCAL_ZIP" ]]; then
+    echo "ERROR: Could not fetch versions from $VERSIONS_URL" >&2
+    if [[ -n "$TARGET_VERSION" ]]; then
+      print_manual_download_instructions
+    fi
+    exit 1
+  fi
+  echo "WARNING: Could not fetch version metadata. Continuing with the specified local ZIP." >&2
+  : > "$VERSIONS_JSON"
 fi
 
 CURRENT_BRANCH="$(get_current_branch "$VERSIONS_JSON" 2>/dev/null || true)"
@@ -957,7 +1011,7 @@ fi
 
 # ── Step 4: Download and extract version zip ───────────────────────────────────
 NEED_DOWNLOAD=false
-if [[ ! -d "$VERSION_DIR" ]]; then
+if [[ -n "$LOCAL_ZIP" || ! -d "$VERSION_DIR" ]]; then
   NEED_DOWNLOAD=true
 elif $SKIP_DOWNLOAD; then
   echo "Skipping download: $VERSION_DIR already on disk (--skip-download)."
@@ -968,7 +1022,7 @@ else
   [[ "$yn" =~ ^[Yy]$ ]] && NEED_DOWNLOAD=true
 fi
 
-if $NEED_DOWNLOAD; then
+if $NEED_DOWNLOAD && [[ -z "$LOCAL_ZIP" ]]; then
   COMM_USER="${REDCAP_COMMUNITY_USER:-}"
   COMM_PASS="${REDCAP_COMMUNITY_PASSWORD:-}"
 
@@ -987,13 +1041,15 @@ if $NEED_DOWNLOAD; then
     echo ""
     echo "Downloading REDCap v$TARGET_VERSION from VUMC..."
 
-    if ! download_version_zip "$TARGET_VERSION" "$COMM_USER" "$COMM_PASS" "$ZIP_FILE"; then
-      echo "ERROR: Download request failed (network error)." >&2
+    if ! download_http_status="$(download_version_zip "$TARGET_VERSION" "$COMM_USER" "$COMM_PASS" "$ZIP_FILE")"; then
+      echo "ERROR: VUMC download request failed (curl HTTP status: ${download_http_status:-unavailable})." >&2
+      print_manual_download_instructions
       exit 1
     fi
 
     if [[ ! -s "$ZIP_FILE" ]]; then
-      echo "ERROR: Downloaded file is empty." >&2
+      echo "ERROR: VUMC returned an empty download (HTTP $download_http_status)." >&2
+      print_manual_download_instructions
       exit 1
     fi
 
@@ -1010,9 +1066,10 @@ except Exception:
 " "$ZIP_FILE" 2>/dev/null || true)"
       echo "ERROR: VUMC responded: $ERR" >&2
       echo ""
-      read -r -p "Retry with different credentials? [y/N]: " retry
+      read -r -p "Retry with different credentials? [y/N]: " retry || retry=""
       echo ""
       if [[ ! "$retry" =~ ^[Yy]$ ]]; then
+        print_manual_download_instructions
         exit 1
       fi
       # Clear credentials so they are prompted again on next iteration
@@ -1021,11 +1078,33 @@ except Exception:
       continue
     fi
 
-    break  # Successful download
+    if [[ "$download_http_status" != "200" ]]; then
+      echo "ERROR: VUMC package download returned HTTP $download_http_status." >&2
+      print_manual_download_instructions
+      exit 1
+    fi
+    if ! validate_downloaded_zip "$ZIP_FILE" "$download_http_status"; then
+      print_manual_download_instructions
+      exit 1
+    fi
+    break
   done
+fi
 
+if $NEED_DOWNLOAD; then
+  if [[ -n "$LOCAL_ZIP" ]]; then
+    ZIP_FILE="$LOCAL_ZIP"
+    echo "Using local upgrade ZIP: $ZIP_FILE"
+  fi
   if ! command -v unzip >/dev/null 2>&1; then
     echo "ERROR: 'unzip' is required to extract the zip. Install it and retry." >&2
+    exit 1
+  fi
+
+  echo "Validating ZIP archive..."
+  if ! unzip -tq "$ZIP_FILE"; then
+    echo "ERROR: Upgrade ZIP failed its integrity check." >&2
+    print_manual_download_instructions
     exit 1
   fi
 
@@ -1034,16 +1113,16 @@ except Exception:
 
   echo "Extracting zip..."
   if ! unzip -q "$ZIP_FILE" -d "$TMP_EXTRACT"; then
-    echo "ERROR: Failed to extract the downloaded zip." >&2
+    echo "ERROR: Failed to extract the upgrade ZIP." >&2
+    print_manual_download_instructions
     exit 1
   fi
 
   # Zip structure from VUMC: redcap/redcap_vX.Y.Z/
   SRC_DIR="$TMP_EXTRACT/redcap/redcap_v$TARGET_VERSION"
-  if [[ ! -d "$SRC_DIR" ]]; then
-    echo "ERROR: Expected directory not found in zip: redcap/redcap_v$TARGET_VERSION/" >&2
-    echo "  Zip contents (top level):" >&2
-    ls "$TMP_EXTRACT/" >&2 || true
+  if [[ ! -f "$SRC_DIR/upgrade.php" ]]; then
+    echo "ERROR: ZIP is missing redcap/redcap_v$TARGET_VERSION/upgrade.php." >&2
+    print_manual_download_instructions
     exit 1
   fi
 

@@ -102,6 +102,19 @@ sudo ./redcap_easy_upgrade.sh 16.0.15
 sudo ./redcap_easy_upgrade.sh --skip-download 16.0.15
 ```
 
+**Use a manually downloaded Upgrade ZIP**
+
+If the automatic download fails, sign in to REDCap Community, find the target
+release in AnswerHub, and download its **Upgrade ZIP**. Copy the archive to the
+REDCap server and run the following with the matching target version.
+
+```bash
+sudo ./redcap_easy_upgrade.sh --zip /path/to/upgrade.zip 17.6.5
+```
+
+Easy Upgrade tests the archive and checks for the target version's upgrade
+script before installing the files.
+
 **Pass credentials at runtime without editing the config**
 
 ```bash
